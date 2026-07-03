@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Backups: a simple stacked-box silhouette. Plain vector, no externals. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Lower box -->
+    <path
+        android:fillColor="#E0E0E0"
+        android:strokeColor="#000000"
+        android:strokeWidth="2"
+        android:pathData="M30,58 L30,84 L78,84 L78,58 Z" />
+    <!-- Lower box latch -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M50,68 L58,68 L58,74 L50,74 Z" />
+    <!-- Upper box -->
+    <path
+        android:fillColor="#E0E0E0"
+        android:strokeColor="#000000"
+        android:strokeWidth="2"
+        android:pathData="M36,30 L36,52 L72,52 L72,30 Z" />
+    <!-- Upper box latch -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M52,40 L58,40 L58,46 L52,46 Z" />
+</vector>
