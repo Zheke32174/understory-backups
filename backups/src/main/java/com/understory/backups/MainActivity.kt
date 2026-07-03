@@ -34,9 +34,10 @@ import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.PhoneAndroid
@@ -65,12 +66,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
+import com.understory.backup.RecoveryFile
 import com.understory.backups.BuildConfig
 import com.understory.backups.R
 import com.understory.security.Crypto
@@ -79,7 +80,6 @@ import com.understory.security.DiagnosticsDump
 import com.understory.security.DiagnosticsScreen
 import com.understory.security.KeepAliveBackHandler
 import com.understory.security.TransientFlight
-import com.understory.security.SecureButton
 import com.understory.security.SecureOutlinedButton
 import com.understory.security.ui.components.SuiteCard
 import com.understory.security.ui.components.SuiteListRow
@@ -251,7 +251,7 @@ class MainActivity : FragmentActivity() {
     }
 }
 
-private enum class Stage { Setup, Unlock, Rebind, Main, Encrypt, Decrypt, DecryptRecovery, RestoreContent, Reveal, LocalSnapshots, DeviceSnapshot, Diagnostics }
+private enum class Stage { Setup, Unlock, RestoreRecovery, Main, Encrypt, Decrypt, RestoreContent, LocalSnapshots, DeviceSnapshot, Diagnostics }
 
 @Composable
 private fun BackupsRoot(
@@ -293,15 +293,15 @@ private fun BackupsRoot(
             UnlockScreen(
                 activity = activity,
                 onUnlocked = { setUnlocked(it); setStage(Stage.Main) },
-                onNeedRebind = { setStage(Stage.Rebind) },
+                onNeedRestore = { setStage(Stage.RestoreRecovery) },
                 onClose = onClose,
             )
         }
-        Stage.Rebind -> {
-            KeepAliveBackHandler("backups.Root.Rebind")
-            RebindScreen(
+        Stage.RestoreRecovery -> {
+            KeepAliveBackHandler("backups.Root.RestoreRecovery")
+            RestoreRecoveryScreen(
                 activity = activity,
-                onRebound = { setUnlocked(it); setStage(Stage.Main) },
+                onRestored = { setUnlocked(it); setStage(Stage.Main) },
                 onClose = onClose,
             )
         }
@@ -314,11 +314,11 @@ private fun BackupsRoot(
             }
             KeepAliveBackHandler("backups.Root.Main")
             MainScreen(
+                vault = v,
                 onEncrypt = { setStage(Stage.Encrypt) },
                 onDecrypt = { setStage(Stage.Decrypt) },
-                onDecryptRecovery = { setStage(Stage.DecryptRecovery) },
                 onRestoreContent = { setStage(Stage.RestoreContent) },
-                onReveal = { setStage(Stage.Reveal) },
+                onRestoreRecovery = { setStage(Stage.RestoreRecovery) },
                 onLocalSnapshots = { setStage(Stage.LocalSnapshots) },
                 onDeviceSnapshot = { setStage(Stage.DeviceSnapshot) },
                 onLock = { v.lock(); setUnlocked(null); onClose() },
@@ -339,19 +339,10 @@ private fun BackupsRoot(
             BackHandler { backToMain() }
             DecryptScreen(vault = v, onBack = backToMain, initialInputUri = handoff)
         }
-        Stage.DecryptRecovery -> {
-            BackHandler { backToMain() }
-            DecryptRecoveryScreen(onBack = backToMain)
-        }
         Stage.RestoreContent -> {
             val v = unlockedRef() ?: return run { setStage(Stage.Unlock) }
             BackHandler { backToMain() }
             ContentStreamRestoreScreen(vault = v, onBack = backToMain)
-        }
-        Stage.Reveal -> {
-            val v = unlockedRef() ?: return run { setStage(Stage.Unlock) }
-            BackHandler { backToMain() }
-            RevealScreen(vault = v, onBack = backToMain)
         }
         Stage.LocalSnapshots -> {
             val v = unlockedRef() ?: return run { setStage(Stage.Unlock) }
@@ -399,21 +390,6 @@ private fun SetupScreen(
     var step by remember { mutableIntStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
     val deviceIssue = remember { deviceUnsupportedReason(ctx) }
-    // The vault created in step 1, held until the mandatory recovery-key
-    // escrow (step 2, backups.md §8.1 / D-4) is confirmed. Setup does NOT
-    // complete — onCreated is not called — until the user records the key.
-    var createdVault by remember { mutableStateOf<UnlockedBackupsVault?>(null) }
-
-    if (step == 2) {
-        val v = createdVault
-        if (v == null) { step = 1 } else {
-            SetupRecoveryEscrowStep(
-                vault = v,
-                onConfirmed = { onCreated(v) },
-            )
-            return
-        }
-    }
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
@@ -438,13 +414,12 @@ private fun SetupScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 WarningCard(
-                    "Cross-device decrypt: the master can be revealed (also " +
-                        "biometric-gated) as a base64 recovery string. To decrypt " +
-                        "an envelope on a DIFFERENT device, reveal the recovery " +
-                        "key here, transfer the string to the other device, and " +
-                        "use the \"Decrypt with recovery key\" option there. " +
-                        "Treat the recovery string as ultimate secret — anyone " +
-                        "with it can decrypt every envelope you've made.",
+                    "Recovery is a FILE, never a code you type. Backups seals a " +
+                        "recovery kit inside the app automatically, so a fingerprint " +
+                        "or screen-lock change re-binds silently with nothing to enter. " +
+                        "For a lost/replaced phone, export a recovery file to somewhere " +
+                        "safe (USB, cloud) — anyone who has that file can open your " +
+                        "vault, so keep it safe.",
                 )
                 Button(onClick = { step = 1 }, modifier = Modifier.fillMaxWidth()) {
                     Text("Self-generate vault")
@@ -464,16 +439,20 @@ private fun SetupScreen(
                             onSuccess = { authed ->
                                 runCatching {
                                     val v = BackupsVault.create(ctx, authed)
+                                    // SELF-SEAL the recovery kit at create — mint a
+                                    // random recovery key the user never sees, seal
+                                    // the KEK material under the non-auth wrap key.
+                                    // Nothing shown, nothing typed. A later
+                                    // re-enrollment re-binds silently from this kit.
+                                    val kek = v.kekBytes()
+                                    try {
+                                        RecoveryFile.seal(ctx, ctx.packageName, kek)
+                                    } finally {
+                                        Crypto.wipe(kek)
+                                    }
                                     if (activity.lifecycle.currentState
                                             .isAtLeast(Lifecycle.State.STARTED)
-                                    ) {
-                                        // Do NOT complete setup yet — route to
-                                        // the mandatory recovery-key escrow step
-                                        // (§8.1). onCreated fires only after the
-                                        // user confirms they saved the key.
-                                        createdVault = v
-                                        step = 2
-                                    } else v.lock()
+                                    ) onCreated(v) else v.lock()
                                 }.onFailure { error = "Setup failed: ${it.message}" }
                             },
                             onError = { msg -> error = "Authentication failed: $msg" },
@@ -486,133 +465,11 @@ private fun SetupScreen(
     }
 }
 
-/**
- * Mandatory recovery-key escrow (backups.md §8.1, resolves D-4). Setup does not
- * complete until the user records the base64 recovery key (the vault's KEK).
- * Adding a fingerprint later destroys the Keystore wrap key, after which this
- * string is the ONLY way to decrypt any envelope — so we force it in front of
- * the user before the app is usable. FLAG_SECURE is already set on the window,
- * so screenshots are blocked; copy + save-to-file are offered instead.
- *
- * Confirmation is a short "type the last 6 characters" check — cheap proof the
- * user actually looked at and captured the key, not a checkbox they can reflex-
- * tap past.
- */
-@Composable
-private fun SetupRecoveryEscrowStep(
-    vault: UnlockedBackupsVault,
-    onConfirmed: () -> Unit,
-) {
-    val ctx = LocalContext.current
-    val recovery = remember { vault.recoveryChars() }
-    DisposableEffectWipe(recovery)
-    val recoveryStr = remember(recovery) { String(recovery) }
-    val last6 = remember(recoveryStr) {
-        if (recoveryStr.length >= 6) recoveryStr.takeLast(6) else recoveryStr
-    }
-    var typed by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf<String?>(null) }
-
-    val saveToFile = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("text/plain"),
-    ) { uri ->
-        BackupsVaultManager.endTransientFlight()
-        if (uri == null) return@rememberLauncherForActivityResult
-        val ok = runCatching {
-            ctx.contentResolver.openOutputStream(uri, "w").use { out ->
-                requireNotNull(out) { "no output stream" }
-                out.write(recoveryStr.toByteArray(Charsets.UTF_8))
-            }
-        }.isSuccess
-        status = if (ok) "Recovery key saved to the chosen file."
-        else "Couldn't write the recovery-key file."
-    }
-
-    Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("save your recovery key", style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onSurface)
-        WarningCard(
-            "This key is the ONLY way to recover your backups if you add a " +
-                "fingerprint, change your screen lock, or lose this phone. " +
-                "Adding a biometric destroys this device's wrap key — after " +
-                "that, every envelope you made is decryptable only with this " +
-                "string. Save it somewhere safe and OFF this device. We " +
-                "cannot recover it for you.",
-        )
-        InfoCard {
-            Text(recoveryStr, style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface)
-        }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SecureButton(
-                onClick = {
-                    com.understory.security.Clipboard.copySensitive(
-                        context = ctx,
-                        chars = recovery,
-                        autoClearSeconds = 30,
-                        label = "backups-recovery",
-                    )
-                    status = "Copied. Cleared from clipboard in 30s if not overwritten."
-                },
-                modifier = Modifier.weight(1f),
-            ) { Text("Copy") }
-            OutlinedButton(
-                onClick = {
-                    BackupsVaultManager.beginTransientFlight()
-                    runCatching {
-                        saveToFile.launch("backups-recovery-key.txt")
-                    }.onFailure {
-                        BackupsVaultManager.endTransientFlight()
-                        status = "Couldn't open the save dialog: ${it.message}"
-                    }
-                },
-                modifier = Modifier.weight(1f),
-            ) { Text("Save to file") }
-        }
-        Text(
-            "To confirm you saved it, type the LAST 6 characters of the key:",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        OutlinedTextField(
-            value = typed,
-            onValueChange = { typed = it; status = null },
-            label = { Text("Last 6 characters") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        status?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (it.startsWith("Copied") || it.startsWith("Recovery key saved"))
-                    UnderstoryTheme.semantic.success else UnderstoryTheme.semantic.warning,
-            )
-        }
-        Button(
-            onClick = {
-                if (typed.trim() == last6) {
-                    onConfirmed()
-                } else {
-                    status = "That doesn't match the last 6 characters. Check the key above."
-                }
-            },
-            enabled = typed.isNotBlank(),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("I saved it — finish setup")
-        }
-    }
-}
-
 @Composable
 private fun UnlockScreen(
     activity: FragmentActivity,
     onUnlocked: (UnlockedBackupsVault) -> Unit,
-    onNeedRebind: () -> Unit,
+    onNeedRestore: () -> Unit,
     onClose: () -> Unit,
 ) {
     val ctx = LocalContext.current
@@ -620,15 +477,79 @@ private fun UnlockScreen(
     var working by remember { mutableStateOf(false) }
     // Reliable pre-prompt classification (backups.md §8.2): if the header is
     // on disk but the device-auth wrap key is gone, biometric re-enrollment or
-    // a lock-screen change destroyed it — route straight to re-bind rather than
-    // launching a doomed BiometricPrompt that ends in a generic error.
+    // a lock-screen change destroyed it — route to the silent re-bind rather
+    // than launching a doomed BiometricPrompt that ends in a generic error.
     val keyState = remember {
         com.understory.security.VaultRecovery.keyStateAtStartup(
             ctx, BackupsVault.exists(ctx),
         )
     }
-    val invalidated = keyState ==
+    // A doomed BiometricPrompt during daily unlock can also surface invalidation
+    // late (classifyUnlockFailure); flipping this drives the same silent-rebind
+    // LaunchedEffect below rather than duplicating the flow.
+    var lateInvalidated by remember { mutableStateOf(false) }
+    val invalidated = lateInvalidated || keyState ==
         com.understory.security.VaultRecovery.VaultKeyState.PERMANENTLY_INVALIDATED
+
+    // Silent re-bind (operator directive — nothing on screen, nothing typed):
+    // on an invalidated vault, FIRST try the in-vault sealed recovery kit. It is
+    // wrapped by the non-auth RecoveryWrapKey, which survives re-enrollment, so
+    // we can rebuild the KEK and re-wrap it under a fresh device-auth key with a
+    // single biometric confirmation and NO key entry. Only if the kit is gone
+    // (returns null) do we fall back to importing an exported recovery file.
+    var rebinding by remember { mutableStateOf(false) }
+    LaunchedEffect(invalidated) {
+        if (!invalidated || rebinding) return@LaunchedEffect
+        val kek = RecoveryFile.readKekFromSealedKit(ctx)
+        if (kek == null) {
+            // No sealed kit — the only path left is the exported file.
+            onNeedRestore()
+            return@LaunchedEffect
+        }
+        rebinding = true
+        runCatching {
+            // Clear the invalidated alias so a fresh device-auth key is minted.
+            Crypto.deleteDeviceAuthKey()
+            val cipher = Crypto.deviceAuthCipherForEncrypt()
+            promptAuth(activity, "Re-bind backups to this device", cipher,
+                onSuccess = { authed ->
+                    runCatching {
+                        val v = BackupsVault.rebindFromKek(ctx, kek, authed)
+                        // Re-seal the kit with a fresh recovery key now the vault
+                        // is re-bound, so the at-rest kit stays valid.
+                        val fresh = v.kekBytes()
+                        try {
+                            RecoveryFile.reseal(ctx, ctx.packageName, fresh)
+                        } finally {
+                            Crypto.wipe(fresh)
+                        }
+                        Crypto.wipe(kek)
+                        if (activity.lifecycle.currentState
+                                .isAtLeast(Lifecycle.State.STARTED)
+                        ) onUnlocked(v) else v.lock()
+                    }.onFailure {
+                        Crypto.wipe(kek)
+                        rebinding = false
+                        error = "Silent re-bind failed. Restore from your recovery file instead."
+                    }
+                },
+                onError = { msg ->
+                    Crypto.wipe(kek)
+                    rebinding = false
+                    error = "Authentication failed: $msg"
+                },
+                onCancel = {
+                    Crypto.wipe(kek)
+                    rebinding = false
+                    error = "Authentication cancelled."
+                },
+            )
+        }.onFailure {
+            Crypto.wipe(kek)
+            rebinding = false
+            error = "Re-bind init failed: ${it.message}"
+        }
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
@@ -640,13 +561,21 @@ private fun UnlockScreen(
         if (invalidated) {
             WarningCard(
                 com.understory.security.RecoveryCopy.INVALIDATED_TITLE + ".\n\n" +
-                    "Your biometric enrollment or screen lock changed, which " +
-                    "reset this device's wrap key. Your backups are NOT lost — " +
-                    "re-bind this vault with the recovery key you saved at " +
-                    "setup, and every envelope stays decryptable.",
+                    "Your biometric enrollment or screen lock changed, which reset " +
+                    "this device's wrap key. Your backups are NOT lost — the app is " +
+                    "silently re-binding the vault from its sealed recovery kit; " +
+                    "just confirm with your device biometric or PIN.",
             )
-            Button(onClick = onNeedRebind, modifier = Modifier.fillMaxWidth()) {
-                Text("Re-bind with recovery key")
+            error?.let { Text(it, style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error) }
+            if (error != null) {
+                // Silent re-bind couldn't complete — offer the file import path.
+                Button(onClick = onNeedRestore, modifier = Modifier.fillMaxWidth()) {
+                    Text("Restore from your recovery file")
+                }
+            } else {
+                Text("Re-binding…", style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             OutlinedButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Close") }
             return@Column
@@ -674,13 +603,13 @@ private fun UnlockScreen(
                                 ) onUnlocked(v) else { v.lock(); working = false }
                             }.onFailure { t ->
                                 working = false
-                                // Distinguish invalidation (route to re-bind)
+                                // Distinguish invalidation (drive silent re-bind)
                                 // from a transient failure (retry) — §8.2.
                                 if (com.understory.security.VaultRecovery
                                         .classifyUnlockFailure(t) ==
                                     com.understory.security.VaultRecovery
                                         .VaultKeyState.PERMANENTLY_INVALIDATED
-                                ) onNeedRebind()
+                                ) lateInvalidated = true
                                 else error = "Vault decryption failed."
                             }
                         },
@@ -693,7 +622,7 @@ private fun UnlockScreen(
                             .classifyUnlockFailure(t) ==
                         com.understory.security.VaultRecovery
                             .VaultKeyState.PERMANENTLY_INVALIDATED
-                    ) onNeedRebind()
+                    ) lateInvalidated = true
                     else error = "Crypto init failed: ${t.message}"
                 }
             },
@@ -706,93 +635,117 @@ private fun UnlockScreen(
 }
 
 /**
- * Re-bind flow (backups.md §8.2). Shown when the device-auth wrap key was
- * destroyed by biometric re-enrollment / lock change. The user pastes the
- * recovery key they saved at Setup; we mint a FRESH wrap key (biometric-gated)
- * and re-wrap the same KEK, so the vault — and every envelope — is usable again
- * on this device.
+ * Restore-from-recovery-FILE flow (operator directive 2026-07-03 — "the screen
+ * is the enemy"). Shown when the device-auth wrap key was destroyed AND the
+ * in-vault sealed kit is gone (or the user chose to restore from an off-device
+ * file). The user IMPORTS an opaque recovery file via SAF — they never type a
+ * key. [RecoveryFile.importKit] reads the KEK material carried inside the file;
+ * we then mint a FRESH device-auth wrap key (biometric-gated), re-wrap that KEK,
+ * and re-seal a new in-vault kit. Every envelope stays decryptable.
  */
 @Composable
-private fun RebindScreen(
+private fun RestoreRecoveryScreen(
     activity: FragmentActivity,
-    onRebound: (UnlockedBackupsVault) -> Unit,
+    onRestored: (UnlockedBackupsVault) -> Unit,
     onClose: () -> Unit,
 ) {
     val ctx = LocalContext.current
-    var recoveryKey by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var working by remember { mutableStateOf(false) }
+
+    val pickKit = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        BackupsVaultManager.endTransientFlight()
+        if (uri == null) return@rememberLauncherForActivityResult
+        if (working) return@rememberLauncherForActivityResult
+        working = true; error = null
+        // Read the KEK material out of the opaque recovery file — no typing.
+        val kek = runCatching {
+            ctx.contentResolver.openInputStream(uri).use { input ->
+                requireNotNull(input) { "couldn't open the recovery file" }
+                RecoveryFile.importKit(input)
+            }
+        }.getOrElse {
+            working = false
+            error = "That file isn't a valid backups recovery file, or it's " +
+                "corrupt. (${it.message})"
+            return@rememberLauncherForActivityResult
+        }
+        runCatching {
+            // Clear the invalidated alias so a fresh device-auth key is minted.
+            Crypto.deleteDeviceAuthKey()
+            val cipher = Crypto.deviceAuthCipherForEncrypt()
+            promptAuth(activity, "Re-bind backups to this device", cipher,
+                onSuccess = { authed ->
+                    runCatching {
+                        val v = BackupsVault.rebindFromKek(ctx, kek, authed)
+                        // Seal a fresh in-vault kit so silent re-bind works again.
+                        val fresh = v.kekBytes()
+                        try {
+                            RecoveryFile.reseal(ctx, ctx.packageName, fresh)
+                        } finally {
+                            Crypto.wipe(fresh)
+                        }
+                        Crypto.wipe(kek)
+                        if (activity.lifecycle.currentState
+                                .isAtLeast(Lifecycle.State.STARTED)
+                        ) onRestored(v) else { v.lock(); working = false }
+                    }.onFailure {
+                        Crypto.wipe(kek)
+                        error = "Restore failed — the recovery file didn't match " +
+                            "this vault, or the header is corrupt. (${it.message})"
+                        working = false
+                    }
+                },
+                onError = { msg ->
+                    Crypto.wipe(kek)
+                    error = "Authentication failed: $msg"; working = false
+                },
+                onCancel = {
+                    Crypto.wipe(kek)
+                    error = "Authentication cancelled."; working = false
+                },
+            )
+        }.onFailure {
+            Crypto.wipe(kek)
+            error = "Crypto init failed: ${it.message}"; working = false
+        }
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("re-bind this vault", style = MaterialTheme.typography.headlineSmall,
+        Text("restore from recovery file", style = MaterialTheme.typography.headlineSmall,
             color = MaterialTheme.colorScheme.onSurface)
         Text(
-            "Enter the base64 recovery key you saved at setup. We'll re-create " +
-                "this device's wrap key (biometric) and re-establish the vault. " +
-                "Nothing you backed up is lost.",
+            "Pick the recovery file you exported (the .ukit file you saved to a " +
+                "USB drive, cloud, or safe place). Backups reads it and re-binds " +
+                "this vault — you never type a key. Nothing you backed up is lost.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         error?.let { Text(it, style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.error) }
 
-        OutlinedTextField(
-            value = recoveryKey,
-            onValueChange = { recoveryKey = it },
-            label = { Text("Recovery key (base64)") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-        )
         Button(
             onClick = {
-                if (working || recoveryKey.isBlank()) return@Button
-                working = true; error = null
-                val keyChars = recoveryKey.toCharArray()
-                recoveryKey = ""  // drop the live String reference
-                runCatching {
-                    // Clear the invalidated alias so a fresh key is generated.
-                    Crypto.deleteDeviceAuthKey()
-                    val cipher = Crypto.deviceAuthCipherForEncrypt()
-                    promptAuth(activity, "Re-bind backups to this device", cipher,
-                        onSuccess = { authed ->
-                            runCatching {
-                                val v = BackupsVault.rebindFromRecovery(ctx, keyChars, authed)
-                                Crypto.wipe(keyChars)
-                                if (activity.lifecycle.currentState
-                                        .isAtLeast(Lifecycle.State.STARTED)
-                                ) onRebound(v) else { v.lock(); working = false }
-                            }.onFailure {
-                                Crypto.wipe(keyChars)
-                                error = "Re-bind failed — wrong recovery key or " +
-                                    "a corrupted vault header. (${it.message})"
-                                working = false
-                            }
-                        },
-                        onError = { msg ->
-                            Crypto.wipe(keyChars)
-                            error = "Authentication failed: $msg"; working = false
-                        },
-                        onCancel = {
-                            Crypto.wipe(keyChars)
-                            error = "Authentication cancelled."; working = false
-                        },
-                    )
-                }.onFailure {
-                    Crypto.wipe(keyChars)
-                    error = "Crypto init failed: ${it.message}"; working = false
-                }
+                if (working) return@Button
+                BackupsVaultManager.beginTransientFlight()
+                runCatching { pickKit.launch(arrayOf("*/*")) }
+                    .onFailure {
+                        BackupsVaultManager.endTransientFlight()
+                        error = "Couldn't open the file picker: ${it.message}"
+                    }
             },
-            enabled = recoveryKey.isNotBlank() && !working,
+            enabled = !working,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (working) "Re-binding…" else "Re-bind vault")
+            Text(if (working) "Restoring…" else "Pick recovery file")
         }
         OutlinedButton(
-            onClick = { recoveryKey = ""; onClose() },
+            onClick = onClose,
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Close") }
     }
@@ -841,11 +794,11 @@ private enum class HomeTab(val label: String, val icon: ImageVector) {
 
 @Composable
 private fun MainScreen(
+    vault: UnlockedBackupsVault,
     onEncrypt: () -> Unit,
     onDecrypt: () -> Unit,
-    onDecryptRecovery: () -> Unit,
     onRestoreContent: () -> Unit,
-    onReveal: () -> Unit,
+    onRestoreRecovery: () -> Unit,
     onLocalSnapshots: () -> Unit,
     onDeviceSnapshot: () -> Unit,
     onLock: () -> Unit,
@@ -859,6 +812,37 @@ private fun MainScreen(
 
     var tab by rememberSaveable { mutableStateOf(HomeTab.Backup.name) }
     val current = remember(tab) { HomeTab.valueOf(tab) }
+
+    // "Export recovery file" (operator directive): write ONE opaque, self-
+    // contained recovery file to a user-chosen SAF location. The file carries
+    // its own recovery key plus the R-encrypted KEK material, so it restores on
+    // a brand-new device. Its contents are NEVER displayed. Honest copy below.
+    var exportStatus by remember { mutableStateOf<String?>(null) }
+    val exportRecovery = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri ->
+        BackupsVaultManager.endTransientFlight()
+        if (uri == null) return@rememberLauncherForActivityResult
+        val kek = vault.kekBytes()
+        exportStatus = runCatching {
+            ctx.contentResolver.openOutputStream(uri, "w").use { out ->
+                requireNotNull(out) { "no output stream" }
+                RecoveryFile.exportKit(ctx, out, kek)
+            }
+            "Recovery file written. Keep it safe — anyone who has it can open your vault."
+        }.getOrElse { "Couldn't write the recovery file: ${it.message}" }
+        Crypto.wipe(kek)
+    }
+    val onExportRecovery: () -> Unit = {
+        exportStatus = null
+        BackupsVaultManager.beginTransientFlight()
+        runCatching {
+            exportRecovery.launch("${ctx.packageName}-recovery.ukit")
+        }.onFailure {
+            BackupsVaultManager.endTransientFlight()
+            exportStatus = "Couldn't open the save dialog: ${it.message}"
+        }
+    }
 
     // Newest few local snapshots, read fresh on each entry into Main. The store
     // is private to filesDir so this is a cheap header parse, not IO the user
@@ -894,7 +878,8 @@ private fun MainScreen(
                         onEncrypt = onEncrypt,
                         onDeviceSnapshot = onDeviceSnapshot,
                         onViewSnapshots = { tab = HomeTab.Snapshots.name },
-                        onReveal = onReveal,
+                        onExportRecovery = onExportRecovery,
+                        exportStatus = exportStatus,
                         onLock = onLock,
                     )
                     HomeTab.Snapshots -> SnapshotsTab(
@@ -904,7 +889,7 @@ private fun MainScreen(
                     )
                     HomeTab.Restore -> RestoreTab(
                         onDecrypt = onDecrypt,
-                        onDecryptRecovery = onDecryptRecovery,
+                        onRestoreRecovery = onRestoreRecovery,
                         onRestoreContent = onRestoreContent,
                     )
                 }
@@ -955,7 +940,7 @@ private fun HomeNavBar(current: HomeTab, onSelect: (HomeTab) -> Unit) {
 /**
  * Backup tab — the primary face: encryption-posture hero, snapshot summary,
  * the two backup destinations (single-file envelope + device-wide snapshot),
- * the reveal/lock controls, and honest complement copy.
+ * the export-recovery-file / lock controls, and honest complement copy.
  */
 @Composable
 private fun BackupTab(
@@ -963,7 +948,8 @@ private fun BackupTab(
     onEncrypt: () -> Unit,
     onDeviceSnapshot: () -> Unit,
     onViewSnapshots: () -> Unit,
-    onReveal: () -> Unit,
+    onExportRecovery: () -> Unit,
+    exportStatus: String?,
     onLock: () -> Unit,
 ) {
     Column(
@@ -1036,12 +1022,30 @@ private fun BackupTab(
         )
 
         SuiteSectionHeader("Recovery")
-        // Reveal directly exposes the master key — the one true tap-jacking-
-        // sensitive entry point — so it keeps the SecureOutlinedButton wrapper.
-        SecureOutlinedButton(onClick = onReveal, modifier = Modifier.fillMaxWidth()) {
-            Icon(Icons.Filled.Key, contentDescription = null, modifier = Modifier.size(18.dp))
+        // Export writes ONE opaque recovery file to a SAF location. The file is
+        // never displayed and the recovery key is never shown or typed — the app
+        // self-manages it. SecureOutlinedButton keeps the tap-jacking guard on
+        // this sensitive action.
+        Text(
+            "Your vault silently re-binds itself after a fingerprint or screen-lock " +
+                "change — nothing to do. For a lost or replaced phone, export a " +
+                "recovery file and keep it somewhere safe. It is a single opaque " +
+                "file; anyone who has it can open your vault.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        SecureOutlinedButton(onClick = onExportRecovery, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Filled.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(UnderstoryTheme.spacing.sm))
-            Text("Reveal recovery key (for transfer)")
+            Text("Export recovery file")
+        }
+        exportStatus?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (it.startsWith("Recovery file written"))
+                    UnderstoryTheme.semantic.success else UnderstoryTheme.semantic.warning,
+            )
         }
 
         // Complement surfacing (§13, D-16/E) — honest facts about what this tool
@@ -1063,8 +1067,8 @@ private fun BackupTab(
             }
             Spacer(Modifier.height(UnderstoryTheme.spacing.sm))
             Text(
-                "Your recovery key is the only restore path — keep it safe and off " +
-                    "this device.",
+                "Your exported recovery file is the only off-device restore path — " +
+                    "keep it safe and off this device.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1166,13 +1170,13 @@ private fun SnapshotsTab(
 
 /**
  * Restore tab — the three restore paths as leading-icon dashboard rows: decrypt
- * an envelope on this device, decrypt with a cross-device recovery key, or
- * restore a content-stream (.usbs) into a folder.
+ * an envelope on this device, re-bind this vault from an exported recovery file,
+ * or restore a content-stream (.usbs) into a folder.
  */
 @Composable
 private fun RestoreTab(
     onDecrypt: () -> Unit,
-    onDecryptRecovery: () -> Unit,
+    onRestoreRecovery: () -> Unit,
     onRestoreContent: () -> Unit,
 ) {
     Column(
@@ -1195,8 +1199,9 @@ private fun RestoreTab(
             )
             Spacer(Modifier.height(UnderstoryTheme.spacing.xs))
             Text(
-                "Decrypt an envelope you made, or one from another device using its " +
-                    "recovery key. Output is written to a location you pick.",
+                "Decrypt an envelope you made on this device, or re-bind this vault " +
+                    "from a recovery file you exported. Output is written to a " +
+                    "location you pick.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1208,10 +1213,10 @@ private fun RestoreTab(
             onClick = onDecrypt,
         )
         DashRow(
-            icon = Icons.Filled.Key,
-            headline = "Decrypt with recovery key",
-            supporting = "Cross-device: paste the base64 recovery key from the origin.",
-            onClick = onDecryptRecovery,
+            icon = Icons.Filled.FileUpload,
+            headline = "Restore from recovery file",
+            supporting = "Import the .ukit file you exported — re-binds this vault. No typing.",
+            onClick = onRestoreRecovery,
         )
         DashRow(
             icon = Icons.Filled.Devices,
@@ -1308,8 +1313,8 @@ private fun EncryptScreen(vault: UnlockedBackupsVault, onBack: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurface)
         Text(
             "Master key is unlocked — no passphrase to type. Envelope will be " +
-                "decryptable on this device (biometric) or any device with the " +
-                "recovery key.",
+                "decryptable on this device (biometric), or on another device " +
+                "after you re-bind this vault there from your exported recovery file.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1319,8 +1324,8 @@ private fun EncryptScreen(vault: UnlockedBackupsVault, onBack: () -> Unit) {
         // which Samsung Edge Panel and various system overlays trigger,
         // causing the picker to silently never open. Tap-jacking a "Pick file"
         // button is non-destructive — it just opens the system SAF picker,
-        // which has its own anti-overlay protections. Destructive actions
-        // (Encrypt, Decrypt, Lock, Reveal) keep the SecureButton wrapper.
+        // which has its own anti-overlay protections. Sensitive actions
+        // (Export recovery file) keep the SecureOutlinedButton wrapper.
         OutlinedButton(
             onClick = {
                 Diagnostics.log("backups.Encrypt", "Pick input file: tap")
@@ -1490,8 +1495,8 @@ private fun DecryptScreen(
             color = MaterialTheme.colorScheme.onSurface)
         Text(
             "Uses this device's master key (already unlocked). For envelopes " +
-                "made on a DIFFERENT device, use the \"Decrypt with recovery key\" " +
-                "option from the main screen.",
+                "made on a DIFFERENT device, re-bind this vault from that device's " +
+                "exported recovery file (Restore tab → \"Restore from recovery file\").",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1545,107 +1550,6 @@ private fun DecryptScreen(
             }
             OutlinedButton(
                 onClick = onBack,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-            ) { Text("Back") }
-        }
-    }
-}
-
-@Composable
-private fun DecryptRecoveryScreen(onBack: () -> Unit) {
-    val ctx = LocalContext.current
-    var inputUri by rememberSaveable { mutableStateOf<Uri?>(null) }
-    var outputUri by rememberSaveable { mutableStateOf<Uri?>(null) }
-    // recoveryKey deliberately NOT rememberSaveable — typed secret should
-    // never persist into savedInstanceState (which gets written to disk).
-    var recoveryKey by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf<String?>(null) }
-    var working by remember { mutableStateOf(false) }
-
-    val pickInput = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        BackupsVaultManager.endTransientFlight()
-        inputUri = uri
-    }
-    val createOutput = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/octet-stream"),
-    ) { uri ->
-        BackupsVaultManager.endTransientFlight()
-        outputUri = uri
-    }
-
-    Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Text("decrypt with recovery key", style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onSurface)
-        Text(
-            "For envelopes made on a different device. Paste the base64 " +
-                "recovery key from the origin device's Reveal screen.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        OutlinedButton(
-            onClick = {
-                BackupsVaultManager.beginTransientFlight()
-                pickInput.launch(arrayOf("*/*"))
-            },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (inputUri == null) "Pick envelope file" else "Envelope: ${inputUri?.lastPathSegment ?: "(picked)"}")
-        }
-        OutlinedTextField(
-            value = recoveryKey,
-            onValueChange = { recoveryKey = it },
-            label = { Text("Recovery key (base64 from origin device)") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedButton(
-            onClick = {
-                BackupsVaultManager.beginTransientFlight()
-                createOutput.launch("recovered-${System.currentTimeMillis()}.bin")
-            },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (outputUri == null) "Pick output location" else "Output: ${outputUri?.lastPathSegment ?: "(picked)"}")
-        }
-        status?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (it.startsWith("Decrypted")) UnderstoryTheme.semantic.success
-                    else UnderstoryTheme.semantic.warning,
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = {
-                    val ip = inputUri; val op = outputUri
-                    if (ip == null || op == null || recoveryKey.isEmpty() || working) return@Button
-                    working = true
-                    val keyChars = recoveryKey.toCharArray()
-                    recoveryKey = ""  // drop the live String reference
-                    val result = BackupsFlow.decryptFromEnvelope(ctx, ip, op, keyChars)
-                    status = when (result) {
-                        is BackupsFlow.Result.Success -> result.message
-                        is BackupsFlow.Result.Failure -> result.message
-                    }
-                    Toast.makeText(ctx, status, Toast.LENGTH_LONG).show()
-                    working = false
-                },
-                enabled = inputUri != null && outputUri != null && recoveryKey.isNotEmpty() && !working,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-            ) {
-                Text(if (working) "Decrypting…" else "Decrypt")
-            }
-            OutlinedButton(
-                onClick = { recoveryKey = ""; onBack() },
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             ) { Text("Back") }
         }
@@ -1829,72 +1733,6 @@ private fun runContentStreamRestore(
     return unpackReport ?: throw java.io.IOException("unpack produced no report")
 }
 
-@Composable
-private fun RevealScreen(vault: UnlockedBackupsVault, onBack: () -> Unit) {
-    val ctx = LocalContext.current
-    val recovery = remember { vault.recoveryChars() }
-    DisposableEffectWipe(recovery)
-
-    Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("recovery key", style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onSurface)
-        WarningCard(
-            "Treat this string as ultimate secret. Anyone with it can decrypt " +
-                "every envelope you've made. Transfer to the destination device " +
-                "via a trusted channel (paper, password manager, secure messenger). " +
-                "FLAG_SECURE prevents screenshots; you'll need to type or paste it.",
-        )
-        InfoCard {
-            Text(
-                String(recovery),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        SecureButton(
-            onClick = {
-                // Real 30s clear via the shared Clipboard helper (backups.md
-                // §8.3, A-8/D-12): it sets EXTRA_IS_SENSITIVE AND schedules a
-                // Handler-backed clearPrimaryClip after 30s that fires ONLY if
-                // our labeled+sensitive clip is still the primary clip (a
-                // third-party overwrite isn't trampled). The old toast claimed
-                // an auto-clear no code performed.
-                com.understory.security.Clipboard.copySensitive(
-                    context = ctx,
-                    chars = recovery,
-                    autoClearSeconds = 30,
-                    label = "backups-recovery",
-                )
-                Toast.makeText(
-                    ctx,
-                    "Copied. Cleared from clipboard in 30s if not overwritten.",
-                    Toast.LENGTH_LONG,
-                ).show()
-            },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Copy to clipboard (sensitive)")
-        }
-        OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Done") }
-    }
-}
-
-/**
- * Wipe the displayed recovery CharArray when the Reveal composable
- * leaves composition. The vault's master KEK itself stays alive in
- * BackupsVaultManager; this is just the on-screen view buffer.
- */
-@Composable
-private fun DisposableEffectWipe(buf: CharArray) {
-    androidx.compose.runtime.DisposableEffect(buf) {
-        onDispose { com.understory.security.Crypto.wipe(buf) }
-    }
-}
-
 /**
  * A caution-tinted informational card (the suite's warning surface) — replaces
  * the ad-hoc `Box(background(0xFF3D2A00, RoundedCornerShape))` pattern with the
@@ -1909,14 +1747,4 @@ private fun WarningCard(text: String) {
             color = UnderstoryTheme.semantic.warning,
         )
     }
-}
-
-/**
- * A neutral surfaceVariant card — replaces the ad-hoc `Box(background(0xFF1C1C1C
- * / 0xFF141414))` pattern for reference/complement copy and the revealed
- * recovery string.
- */
-@Composable
-private fun InfoCard(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
-    com.understory.security.ui.components.SuiteCard(content = content)
 }
