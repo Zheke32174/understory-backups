@@ -6,9 +6,7 @@ import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,24 +15,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.understory.security.Diagnostics
+import com.understory.security.ui.components.SuiteCard
+import com.understory.security.ui.components.SwitchRow
+import com.understory.security.ui.theme.UnderstoryTheme
 
 /**
  * Device-wide snapshot configuration. Toggles per section, destination
@@ -110,14 +107,16 @@ fun DeviceSnapshotConfigScreen(
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("device snapshot", color = Color(0xFFE0E0E0), fontSize = 22.sp)
+        Text("device snapshot", style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface)
         Text(
             "Captures a point-in-time snapshot of your device's user-side " +
                 "state, encrypted under the unlocked vault's master key. No " +
                 "system apps, no protected/system settings, no other apps' " +
                 "private storage (Android sandbox prevents reading those " +
                 "anyway). Per-section toggles below.",
-            color = Color(0xFF9E9E9E), fontSize = 12.sp,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         // Notification honesty (backups.md §6, A-14/D-1): the FGS posts
@@ -126,17 +125,13 @@ fun DeviceSnapshotConfigScreen(
         // before the snapshot can run, and degrade honestly (the in-app
         // status line below carries progress) if the user denies.
         if (!hasNotifPerm) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF332A14), RoundedCornerShape(6.dp))
-                    .padding(12.dp),
-            ) {
+            SuiteCard {
                 Text(
                     "Notifications off — snapshot progress will show on this " +
                         "screen while it runs. Grant notifications to watch " +
                         "progress after you navigate away.",
-                    color = Color(0xFFFFB74D), fontSize = 11.sp,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = UnderstoryTheme.semantic.warning,
                 )
             }
             OutlinedButton(
@@ -223,14 +218,16 @@ fun DeviceSnapshotConfigScreen(
         Spacer(Modifier.height(8.dp))
 
         // ---------- Destination ----------
-        Text("Destination", color = Color(0xFFE0E0E0), fontSize = 14.sp)
+        Text("Destination", style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface)
         if (cfg.destinationTreeUri == null) {
             Text(
                 "Internal storage (filesDir/snapshots/). No size cap from " +
                     "us, but the OS bounds your app's quota. Choose an " +
                     "external folder for multi-GB snapshots once full-content " +
                     "backup ships.",
-                color = Color(0xFF9E9E9E), fontSize = 11.sp,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
             // Readable destination name (D-17), not the raw content://…%3A… URI.
@@ -239,7 +236,8 @@ fun DeviceSnapshotConfigScreen(
             }
             Text(
                 "External folder: $destName",
-                color = Color(0xFF9E9E9E), fontSize = 11.sp,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -287,9 +285,9 @@ fun DeviceSnapshotConfigScreen(
         status?.let {
             Text(
                 it,
-                color = if (it.startsWith("Snapshot started")) Color(0xFF81C784)
-                    else Color(0xFFFFB74D),
-                fontSize = 12.sp,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (it.startsWith("Snapshot started")) UnderstoryTheme.semantic.success
+                    else UnderstoryTheme.semantic.warning,
             )
         }
 
@@ -300,6 +298,11 @@ fun DeviceSnapshotConfigScreen(
     }
 }
 
+/**
+ * Section toggle. Delegates to the shared [SwitchRow] so the whole row is one
+ * merged, [Role.Switch] a11y node (TalkBack reads "&lt;label&gt;, switch, on")
+ * instead of an unlabeled control, wrapped in a [SuiteCard] for the card look.
+ */
 @Composable
 private fun SnapshotToggleRow(
     label: String,
@@ -307,18 +310,13 @@ private fun SnapshotToggleRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFF1C1C1C), RoundedCornerShape(6.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.fillMaxWidth(0.85f)) {
-            Text(label, color = Color(0xFFE0E0E0), fontSize = 13.sp)
-            Text(description, color = Color(0xFF9E9E9E), fontSize = 11.sp)
-        }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    SuiteCard {
+        SwitchRow(
+            label = label,
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            supporting = description,
+        )
     }
 }
 

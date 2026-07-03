@@ -4,7 +4,6 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,7 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,12 +24,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.understory.security.Diagnostics
 import com.understory.security.ui.components.ConfirmDestructiveDialog
+import com.understory.security.ui.components.SuiteCard
+import com.understory.security.ui.theme.UnderstoryTheme
 
 /**
  * Browse + restore + delete locally-saved snapshots.
@@ -109,13 +108,15 @@ fun LocalSnapshotsScreen(vault: UnlockedBackupsVault, onBack: () -> Unit) {
         modifier = Modifier.fillMaxSize().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("local snapshots", color = Color(0xFFE0E0E0), fontSize = 22.sp)
+        Text("local snapshots", style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface)
         Text(
             "Encrypted backups saved to this device's private storage. " +
                 "Each snapshot is an AES-256-GCM envelope; the master key " +
                 "comes from the unlocked vault. Tap Restore to decrypt to a " +
                 "user-chosen location, or Delete to remove the snapshot.",
-            color = Color(0xFF9E9E9E), fontSize = 12.sp,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         // Retention (D-15 / A-10): the "keep last N" policy the local-save
@@ -133,23 +134,18 @@ fun LocalSnapshotsScreen(vault: UnlockedBackupsVault, onBack: () -> Unit) {
 
         if (snapshots.isEmpty()) {
             // Empty state fills the remaining space so Back stays pinned.
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .background(Color(0xFF141414), RoundedCornerShape(6.dp))
-                    .padding(20.dp),
-            ) {
-                Text(
-                    "No snapshots yet. From the Encrypt screen, pick an input " +
-                        "file and tap \"Encrypt → save snapshot on this device\".",
-                    color = Color(0xFF707070), fontSize = 12.sp,
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                com.understory.security.ui.components.EmptyState(
+                    title = "No snapshots yet",
+                    body = "From the Encrypt screen, pick an input file and tap " +
+                        "\"Encrypt → save snapshot on this device\".",
                 )
             }
         } else {
             Text(
                 "${snapshots.size} snapshot${if (snapshots.size == 1) "" else "s"}",
-                color = Color(0xFF707070), fontSize = 11.sp,
+                style = MaterialTheme.typography.bodySmall,
+                color = UnderstoryTheme.semantic.dim,
             )
             // weight(1f) so the list scrolls INSIDE the screen and the status
             // line + Back below can never be pushed off (D-11).
@@ -189,9 +185,9 @@ fun LocalSnapshotsScreen(vault: UnlockedBackupsVault, onBack: () -> Unit) {
         status?.let {
             Text(
                 it,
+                style = MaterialTheme.typography.bodyMedium,
                 color = if (it.startsWith("Decrypted") || it.startsWith("Deleted"))
-                    Color(0xFF81C784) else Color(0xFFFFB74D),
-                fontSize = 12.sp,
+                    UnderstoryTheme.semantic.success else UnderstoryTheme.semantic.warning,
             )
         }
 
@@ -211,7 +207,8 @@ private fun RetentionRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {
-        Text("Keep last:", color = Color(0xFF9E9E9E), fontSize = 12.sp)
+        Text("Keep last:", style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
         LocalSnapshotStore.RETENTION_CHOICES.forEach { choice ->
             val selected = choice == keepLast
             OutlinedButton(
@@ -220,8 +217,9 @@ private fun RetentionRow(
             ) {
                 Text(
                     if (choice == 0) "Off" else "$choice",
-                    color = if (selected) Color(0xFF81C784) else Color(0xFFE0E0E0),
-                    fontSize = 12.sp,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (selected) UnderstoryTheme.semantic.success
+                        else MaterialTheme.colorScheme.onSurface,
                 )
             }
         }
@@ -235,35 +233,30 @@ private fun SnapshotRow(
     onRestore: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFF1C1C1C), RoundedCornerShape(6.dp))
-            .padding(12.dp),
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                info.userLabel.ifEmpty { "(no label)" },
-                color = Color(0xFFE0E0E0), fontSize = 13.sp,
-            )
-            Text(
-                "${info.appLabel} · ${info.formattedTimestamp()} · " +
-                    "${info.sizeBytes / 1024} KiB",
-                color = Color(0xFF9E9E9E), fontSize = 11.sp,
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = onRestore,
-                    enabled = !working,
-                    modifier = Modifier.fillMaxWidth(0.6f),
-                ) { Text("Restore") }
-                OutlinedButton(
-                    onClick = onDelete,
-                    enabled = !working,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Delete") }
-            }
+    SuiteCard {
+        Text(
+            info.userLabel.ifEmpty { "(no label)" },
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+            "${info.appLabel} · ${info.formattedTimestamp()} · " +
+                "${info.sizeBytes / 1024} KiB",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = onRestore,
+                enabled = !working,
+                modifier = Modifier.fillMaxWidth(0.6f),
+            ) { Text("Restore") }
+            OutlinedButton(
+                onClick = onDelete,
+                enabled = !working,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Delete") }
         }
     }
 }

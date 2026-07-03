@@ -14,9 +14,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,15 +23,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,15 +38,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
+import com.understory.backups.R
 import com.understory.security.Crypto
 import com.understory.security.Diagnostics
 import com.understory.security.DiagnosticsDump
@@ -60,7 +53,9 @@ import com.understory.security.KeepAliveBackHandler
 import com.understory.security.TransientFlight
 import com.understory.security.SecureButton
 import com.understory.security.SecureOutlinedButton
-import com.understory.security.SuiteStatusFooter
+import com.understory.security.ui.components.SuiteScaffold
+import com.understory.security.ui.theme.UnderstoryAccent
+import com.understory.security.ui.theme.UnderstoryTheme
 import com.understory.security.Tamper
 import com.understory.security.TestingMode
 import javax.crypto.Cipher
@@ -83,11 +78,15 @@ class MainActivity : FragmentActivity() {
         } catch (t: Throwable) {
             Diagnostics.error("backups.MainActivity", "onCreate threw: ${t.javaClass.simpleName}: ${t.message}")
             setContent {
-                Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
-                    Column(modifier = Modifier.padding(20.dp)) {
-                        Text("backups crash", color = Color(0xFFEF5350), fontSize = 18.sp)
-                        Text(t.toString(), color = Color(0xFFE0E0E0), fontSize = 11.sp)
-                    }
+                UnderstoryTheme(accent = UnderstoryAccent.BACKUPS) {
+                    com.understory.security.ui.components.FatalScreen(
+                        title = "backups couldn't start",
+                        reason = "Something failed while initializing the app. Your " +
+                            "encrypted data is untouched — this is a startup error, " +
+                            "not a data loss. Reopen the app; if it recurs, the " +
+                            "details below help diagnose it.",
+                        details = t.toString(),
+                    )
                 }
             }
         }
@@ -129,16 +128,14 @@ class MainActivity : FragmentActivity() {
         } else null
 
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
-                Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF0A0A0A)) {
-                    BackupsRoot(
-                        activity = this,
-                        unlockedRef = ::unlocked,
-                        setUnlocked = { unlocked = it },
-                        onClose = { finishAndRemoveTask() },
-                        initialViewUri = viewUri,
-                    )
-                }
+            UnderstoryTheme(accent = UnderstoryAccent.BACKUPS) {
+                BackupsRoot(
+                    activity = this,
+                    unlockedRef = ::unlocked,
+                    setUnlocked = { unlocked = it },
+                    onClose = { finishAndRemoveTask() },
+                    initialViewUri = viewUri,
+                )
             }
         }
     }
@@ -391,13 +388,10 @@ private fun SetupScreen(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("backups — first-time setup", color = Color(0xFFE0E0E0), fontSize = 22.sp)
+        Text("backups — first-time setup", style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface)
         if (deviceIssue != null) {
-            Box(modifier = Modifier.fillMaxWidth()
-                .background(Color(0xFF3D2A00), RoundedCornerShape(6.dp))
-                .padding(12.dp)) {
-                Text(deviceIssue, color = Color(0xFFFFB74D), fontSize = 12.sp)
-            }
+            WarningCard(deviceIssue)
             OutlinedButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Close") }
             return@Column
         }
@@ -409,22 +403,18 @@ private fun SetupScreen(
                         "this device's screen lock. The master is never displayed and " +
                         "never typed during normal use — every encrypt/decrypt is gated " +
                         "by your device biometric or PIN.",
-                    color = Color(0xFF9E9E9E), fontSize = 12.sp,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Box(modifier = Modifier.fillMaxWidth()
-                    .background(Color(0xFF1C1C1C), RoundedCornerShape(6.dp))
-                    .padding(12.dp)) {
-                    Text(
-                        "Cross-device decrypt: the master can be revealed (also " +
-                            "biometric-gated) as a base64 recovery string. To decrypt " +
-                            "an envelope on a DIFFERENT device, reveal the recovery " +
-                            "key here, transfer the string to the other device, and " +
-                            "use the \"Decrypt with recovery key\" option there. " +
-                            "Treat the recovery string as ultimate secret — anyone " +
-                            "with it can decrypt every envelope you've made.",
-                        color = Color(0xFFFFB74D), fontSize = 11.sp,
-                    )
-                }
+                WarningCard(
+                    "Cross-device decrypt: the master can be revealed (also " +
+                        "biometric-gated) as a base64 recovery string. To decrypt " +
+                        "an envelope on a DIFFERENT device, reveal the recovery " +
+                        "key here, transfer the string to the other device, and " +
+                        "use the \"Decrypt with recovery key\" option there. " +
+                        "Treat the recovery string as ultimate secret — anyone " +
+                        "with it can decrypt every envelope you've made.",
+                )
                 Button(onClick = { step = 1 }, modifier = Modifier.fillMaxWidth()) {
                     Text("Self-generate vault")
                 }
@@ -432,8 +422,10 @@ private fun SetupScreen(
             }
             1 -> {
                 Text("Authenticate with your device to bind the vault master key.",
-                    color = Color(0xFF9E9E9E), fontSize = 12.sp)
-                error?.let { Text(it, color = Color(0xFFEF5350), fontSize = 12.sp) }
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                error?.let { Text(it, style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error) }
                 LaunchedEffect(Unit) {
                     runCatching {
                         val cipher = Crypto.deviceAuthCipherForEncrypt()
@@ -509,28 +501,19 @@ private fun SetupRecoveryEscrowStep(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("save your recovery key", color = Color(0xFFE0E0E0), fontSize = 22.sp)
-        Box(
-            modifier = Modifier.fillMaxWidth()
-                .background(Color(0xFF3D2A00), RoundedCornerShape(6.dp))
-                .padding(12.dp),
-        ) {
-            Text(
-                "This key is the ONLY way to recover your backups if you add a " +
-                    "fingerprint, change your screen lock, or lose this phone. " +
-                    "Adding a biometric destroys this device's wrap key — after " +
-                    "that, every envelope you made is decryptable only with this " +
-                    "string. Save it somewhere safe and OFF this device. We " +
-                    "cannot recover it for you.",
-                color = Color(0xFFFFB74D), fontSize = 12.sp,
-            )
-        }
-        Box(
-            modifier = Modifier.fillMaxWidth()
-                .background(Color(0xFF1C1C1C), RoundedCornerShape(6.dp))
-                .padding(14.dp),
-        ) {
-            Text(recoveryStr, color = Color(0xFFE0E0E0), fontSize = 14.sp)
+        Text("save your recovery key", style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface)
+        WarningCard(
+            "This key is the ONLY way to recover your backups if you add a " +
+                "fingerprint, change your screen lock, or lose this phone. " +
+                "Adding a biometric destroys this device's wrap key — after " +
+                "that, every envelope you made is decryptable only with this " +
+                "string. Save it somewhere safe and OFF this device. We " +
+                "cannot recover it for you.",
+        )
+        InfoCard {
+            Text(recoveryStr, style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface)
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SecureButton(
@@ -560,7 +543,8 @@ private fun SetupRecoveryEscrowStep(
         }
         Text(
             "To confirm you saved it, type the LAST 6 characters of the key:",
-            color = Color(0xFF9E9E9E), fontSize = 12.sp,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         OutlinedTextField(
             value = typed,
@@ -572,9 +556,9 @@ private fun SetupRecoveryEscrowStep(
         status?.let {
             Text(
                 it,
+                style = MaterialTheme.typography.bodyMedium,
                 color = if (it.startsWith("Copied") || it.startsWith("Recovery key saved"))
-                    Color(0xFF81C784) else Color(0xFFFFB74D),
-                fontSize = 12.sp,
+                    UnderstoryTheme.semantic.success else UnderstoryTheme.semantic.warning,
             )
         }
         Button(
@@ -619,23 +603,17 @@ private fun UnlockScreen(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("backups — unlock", color = Color(0xFFE0E0E0), fontSize = 22.sp)
+        Text("backups — unlock", style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface)
 
         if (invalidated) {
-            Box(
-                modifier = Modifier.fillMaxWidth()
-                    .background(Color(0xFF3D2A00), RoundedCornerShape(6.dp))
-                    .padding(12.dp),
-            ) {
-                Text(
-                    com.understory.security.RecoveryCopy.INVALIDATED_TITLE + ".\n\n" +
-                        "Your biometric enrollment or screen lock changed, which " +
-                        "reset this device's wrap key. Your backups are NOT lost — " +
-                        "re-bind this vault with the recovery key you saved at " +
-                        "setup, and every envelope stays decryptable.",
-                    color = Color(0xFFFFB74D), fontSize = 12.sp,
-                )
-            }
+            WarningCard(
+                com.understory.security.RecoveryCopy.INVALIDATED_TITLE + ".\n\n" +
+                    "Your biometric enrollment or screen lock changed, which " +
+                    "reset this device's wrap key. Your backups are NOT lost — " +
+                    "re-bind this vault with the recovery key you saved at " +
+                    "setup, and every envelope stays decryptable.",
+            )
             Button(onClick = onNeedRebind, modifier = Modifier.fillMaxWidth()) {
                 Text("Re-bind with recovery key")
             }
@@ -644,8 +622,10 @@ private fun UnlockScreen(
         }
 
         Text("Authenticate with your device biometric or PIN.",
-            color = Color(0xFF9E9E9E), fontSize = 13.sp)
-        error?.let { Text(it, color = Color(0xFFEF5350), fontSize = 12.sp) }
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        error?.let { Text(it, style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error) }
 
         Button(
             onClick = {
@@ -716,14 +696,17 @@ private fun RebindScreen(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("re-bind this vault", color = Color(0xFFE0E0E0), fontSize = 22.sp)
+        Text("re-bind this vault", style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface)
         Text(
             "Enter the base64 recovery key you saved at setup. We'll re-create " +
                 "this device's wrap key (biometric) and re-establish the vault. " +
                 "Nothing you backed up is lost.",
-            color = Color(0xFF9E9E9E), fontSize = 12.sp,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        error?.let { Text(it, color = Color(0xFFEF5350), fontSize = 12.sp) }
+        error?.let { Text(it, style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error) }
 
         OutlinedTextField(
             value = recoveryKey,
@@ -830,16 +813,25 @@ private fun MainScreen(
     onLock: () -> Unit,
     onDiagnostics: () -> Unit,
 ) {
+    SuiteScaffold(
+        title = androidx.compose.ui.res.stringResource(R.string.app_name),
+        actions = {
+            androidx.compose.material3.TextButton(onClick = onDiagnostics) {
+                Text("Diagnostics")
+            }
+        },
+    ) { pad ->
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
+        modifier = Modifier.fillMaxSize().padding(pad)
+            .verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("backups", color = Color(0xFFE0E0E0), fontSize = 28.sp)
         Text(
             "Local-first encrypted-envelope tool. Master key is self-generated, " +
                 "Keystore-bound, and never typed during normal use. AES-256-GCM " +
                 "with Argon2id key derivation. Files stay on this device.",
-            color = Color(0xFF9E9E9E), fontSize = 13.sp,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(8.dp))
         // Per SAMSUNG_QUIRKS.md: navigation buttons are plain Button. The
@@ -877,39 +869,33 @@ private fun MainScreen(
         // Complement surfacing (§13, D-16/E) — three honest facts that used to
         // live only in config files or nowhere.
         Spacer(Modifier.height(8.dp))
-        Box(
-            modifier = Modifier.fillMaxWidth()
-                .background(Color(0xFF141414), RoundedCornerShape(6.dp))
-                .padding(12.dp),
-        ) {
+        InfoCard {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     "This vault is excluded from Google One and Smart Switch — " +
                         "your recovery key is the only restore path. Keep it safe " +
                         "and off this device.",
-                    color = Color(0xFF9E9E9E), fontSize = 11.sp,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     "Moving phones? Reveal your recovery key, transfer any " +
                         "snapshot to the new device, and use \"Decrypt with " +
                         "recovery key\" there.",
-                    color = Color(0xFF9E9E9E), fontSize = 11.sp,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     "Off-device backup: point your snapshot destination at a " +
                         "Syncthing-synced folder or a USB-OTG drive. Backups only " +
                         "writes the encrypted file — the external tool handles " +
                         "replication, with no network permission in this app.",
-                    color = Color(0xFF9E9E9E), fontSize = 11.sp,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
-
-        Spacer(Modifier.weight(1f))
-        OutlinedButton(onClick = onDiagnostics, modifier = Modifier.fillMaxWidth()) {
-            Text("Diagnostics")
-        }
-        SuiteStatusFooter()
+    }
     }
 }
 
@@ -952,12 +938,14 @@ private fun EncryptScreen(vault: UnlockedBackupsVault, onBack: () -> Unit) {
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("encrypt → envelope", color = Color(0xFFE0E0E0), fontSize = 22.sp)
+        Text("encrypt → envelope", style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface)
         Text(
             "Master key is unlocked — no passphrase to type. Envelope will be " +
                 "decryptable on this device (biometric) or any device with the " +
                 "recovery key.",
-            color = Color(0xFF9E9E9E), fontSize = 12.sp,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         // SAF picker launchers use plain OutlinedButton, NOT SecureOutlinedButton.
@@ -985,14 +973,16 @@ private fun EncryptScreen(vault: UnlockedBackupsVault, onBack: () -> Unit) {
         Text(
             "Single-file envelopes are capped at 16 MiB. Larger files belong " +
                 "in the device-snapshot content stream (from the main screen).",
-            color = Color(0xFF707070), fontSize = 11.sp,
+            style = MaterialTheme.typography.bodySmall,
+            color = UnderstoryTheme.semantic.dim,
         )
         if (overCap) {
             Text(
                 "This file is ${inputSize / (1024 * 1024)} MiB — over the 16 MiB " +
                     "envelope cap. Pick a smaller file, or use the device-snapshot " +
                     "content stream for large data.",
-                color = Color(0xFFEF5350), fontSize = 12.sp,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
             )
         }
         OutlinedTextField(
@@ -1020,8 +1010,9 @@ private fun EncryptScreen(vault: UnlockedBackupsVault, onBack: () -> Unit) {
         status?.let {
             Text(
                 it,
-                color = if (it.startsWith("Encrypted")) Color(0xFF81C784) else Color(0xFFFFB74D),
-                fontSize = 12.sp,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (it.startsWith("Encrypted")) UnderstoryTheme.semantic.success
+                    else UnderstoryTheme.semantic.warning,
             )
         }
         Spacer(Modifier.height(8.dp))
@@ -1129,12 +1120,14 @@ private fun DecryptScreen(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("decrypt envelope (this device)", color = Color(0xFFE0E0E0), fontSize = 22.sp)
+        Text("decrypt envelope (this device)", style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface)
         Text(
             "Uses this device's master key (already unlocked). For envelopes " +
                 "made on a DIFFERENT device, use the \"Decrypt with recovery key\" " +
                 "option from the main screen.",
-            color = Color(0xFF9E9E9E), fontSize = 12.sp,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         OutlinedButton(
@@ -1158,8 +1151,9 @@ private fun DecryptScreen(
         status?.let {
             Text(
                 it,
-                color = if (it.startsWith("Decrypted")) Color(0xFF81C784) else Color(0xFFFFB74D),
-                fontSize = 12.sp,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (it.startsWith("Decrypted")) UnderstoryTheme.semantic.success
+                    else UnderstoryTheme.semantic.warning,
             )
         }
         Spacer(Modifier.height(8.dp))
@@ -1219,11 +1213,13 @@ private fun DecryptRecoveryScreen(onBack: () -> Unit) {
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("decrypt with recovery key", color = Color(0xFFE0E0E0), fontSize = 22.sp)
+        Text("decrypt with recovery key", style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface)
         Text(
             "For envelopes made on a different device. Paste the base64 " +
                 "recovery key from the origin device's Reveal screen.",
-            color = Color(0xFF9E9E9E), fontSize = 12.sp,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         OutlinedButton(
@@ -1255,8 +1251,9 @@ private fun DecryptRecoveryScreen(onBack: () -> Unit) {
         status?.let {
             Text(
                 it,
-                color = if (it.startsWith("Decrypted")) Color(0xFF81C784) else Color(0xFFFFB74D),
-                fontSize = 12.sp,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (it.startsWith("Decrypted")) UnderstoryTheme.semantic.success
+                    else UnderstoryTheme.semantic.warning,
             )
         }
         Spacer(Modifier.height(8.dp))
@@ -1340,13 +1337,15 @@ private fun ContentStreamRestoreScreen(vault: UnlockedBackupsVault, onBack: () -
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("restore content stream", color = Color(0xFFE0E0E0), fontSize = 22.sp)
+        Text("restore content stream", style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface)
         Text(
             "Decrypts a device-snapshot content stream (.usbs) and writes every " +
                 "file back into a folder you pick. Uses this device's unlocked " +
                 "master key. Files are written under their original section " +
                 "(Pictures/, Downloads/, …).",
-            color = Color(0xFF9E9E9E), fontSize = 12.sp,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         OutlinedButton(
             onClick = {
@@ -1371,8 +1370,9 @@ private fun ContentStreamRestoreScreen(vault: UnlockedBackupsVault, onBack: () -
         status?.let {
             Text(
                 it,
-                color = if (it.startsWith("Restored")) Color(0xFF81C784) else Color(0xFFFFB74D),
-                fontSize = 12.sp,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (it.startsWith("Restored")) UnderstoryTheme.semantic.success
+                    else UnderstoryTheme.semantic.warning,
             )
         }
         Spacer(Modifier.height(8.dp))
@@ -1473,30 +1473,19 @@ private fun RevealScreen(vault: UnlockedBackupsVault, onBack: () -> Unit) {
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("recovery key", color = Color(0xFFE0E0E0), fontSize = 22.sp)
-        Box(
-            modifier = Modifier.fillMaxWidth()
-                .background(Color(0xFF3D2A00), RoundedCornerShape(6.dp))
-                .padding(12.dp),
-        ) {
-            Text(
-                "Treat this string as ultimate secret. Anyone with it can decrypt " +
-                    "every envelope you've made. Transfer to the destination device " +
-                    "via a trusted channel (paper, password manager, secure messenger). " +
-                    "FLAG_SECURE prevents screenshots; you'll need to type or paste it.",
-                color = Color(0xFFFFB74D),
-                fontSize = 12.sp,
-            )
-        }
-        Box(
-            modifier = Modifier.fillMaxWidth()
-                .background(Color(0xFF1C1C1C), RoundedCornerShape(6.dp))
-                .padding(14.dp),
-        ) {
+        Text("recovery key", style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface)
+        WarningCard(
+            "Treat this string as ultimate secret. Anyone with it can decrypt " +
+                "every envelope you've made. Transfer to the destination device " +
+                "via a trusted channel (paper, password manager, secure messenger). " +
+                "FLAG_SECURE prevents screenshots; you'll need to type or paste it.",
+        )
+        InfoCard {
             Text(
                 String(recovery),
-                color = Color(0xFFE0E0E0),
-                fontSize = 14.sp,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
             )
         }
         Spacer(Modifier.height(8.dp))
@@ -1538,4 +1527,30 @@ private fun DisposableEffectWipe(buf: CharArray) {
     androidx.compose.runtime.DisposableEffect(buf) {
         onDispose { com.understory.security.Crypto.wipe(buf) }
     }
+}
+
+/**
+ * A caution-tinted informational card (the suite's warning surface) — replaces
+ * the ad-hoc `Box(background(0xFF3D2A00, RoundedCornerShape))` pattern with the
+ * `warningContainer`/`warning` token pair.
+ */
+@Composable
+private fun WarningCard(text: String) {
+    com.understory.security.ui.components.SuiteCard {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = UnderstoryTheme.semantic.warning,
+        )
+    }
+}
+
+/**
+ * A neutral surfaceVariant card — replaces the ad-hoc `Box(background(0xFF1C1C1C
+ * / 0xFF141414))` pattern for reference/complement copy and the revealed
+ * recovery string.
+ */
+@Composable
+private fun InfoCard(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    com.understory.security.ui.components.SuiteCard(content = content)
 }

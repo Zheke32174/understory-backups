@@ -249,7 +249,7 @@
         -->
         <provider
             android:name=".SuiteCapsProvider"
-            android:authorities="com.understory.backups.suitecaps"
+            android:authorities="${applicationId}.suitecaps"
             android:exported="true"
             android:readPermission="com.understory.suite.CAPS"
             android:writePermission="com.understory.suite.CAPS_WRITE"

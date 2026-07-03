@@ -14,7 +14,9 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1-skeleton"
-        resourceConfigurations += listOf("en")
+        // resourceConfigurations=["en"] dropped (shared-gui.md §S-3): it
+        // hard-locks the app to English and blocks future localization; only
+        // `en` exists today so removing it costs nothing and unblocks strings.
         base.archivesName = "backups"
     }
 
