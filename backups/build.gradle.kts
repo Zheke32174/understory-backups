@@ -54,6 +54,10 @@ android {
 
     buildFeatures {
         compose = true
+        // Generates BuildConfig (incl. the FLAVOR field from the prod/eng
+        // product flavors) so the shipping UI can gate the Diagnostics /
+        // dev surface to eng builds only (BuildConfig.FLAVOR == "eng").
+        buildConfig = true
     }
 
     packaging {

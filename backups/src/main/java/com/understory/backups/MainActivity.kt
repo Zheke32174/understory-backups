@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -22,10 +23,33 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.FolderZip
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -37,7 +61,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -45,6 +71,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
+import com.understory.backups.BuildConfig
 import com.understory.backups.R
 import com.understory.security.Crypto
 import com.understory.security.Diagnostics
@@ -54,7 +81,10 @@ import com.understory.security.KeepAliveBackHandler
 import com.understory.security.TransientFlight
 import com.understory.security.SecureButton
 import com.understory.security.SecureOutlinedButton
+import com.understory.security.ui.components.SuiteCard
+import com.understory.security.ui.components.SuiteListRow
 import com.understory.security.ui.components.SuiteScaffold
+import com.understory.security.ui.components.SuiteSectionHeader
 import com.understory.security.ui.theme.UnderstoryAccent
 import com.understory.security.ui.theme.UnderstoryTheme
 import com.understory.security.Tamper
@@ -802,6 +832,13 @@ private fun promptAuth(
     prompt.authenticate(info, BiometricPrompt.CryptoObject(cipher))
 }
 
+/** The three top-level sections of the dashboard NavigationBar. */
+private enum class HomeTab(val label: String, val icon: ImageVector) {
+    Backup("Backup", Icons.Filled.Backup),
+    Snapshots("Snapshots", Icons.Filled.History),
+    Restore("Restore", Icons.Filled.Restore),
+}
+
 @Composable
 private fun MainScreen(
     onEncrypt: () -> Unit,
@@ -814,90 +851,418 @@ private fun MainScreen(
     onLock: () -> Unit,
     onDiagnostics: () -> Unit,
 ) {
+    val ctx = LocalContext.current
+    // Dev/diagnostics surface ships ONLY in eng builds. In prod BuildConfig.FLAVOR
+    // is "prod", so the top-bar action, the eng-only footer, and every path into
+    // DiagnosticsScreen are absent — a clean shipping face.
+    val isEng = BuildConfig.FLAVOR == "eng"
+
+    var tab by rememberSaveable { mutableStateOf(HomeTab.Backup.name) }
+    val current = remember(tab) { HomeTab.valueOf(tab) }
+
+    // Newest few local snapshots, read fresh on each entry into Main. The store
+    // is private to filesDir so this is a cheap header parse, not IO the user
+    // waits on. Used by both the Backup summary and the Snapshots tab preview.
+    val snapshots = remember { runCatching { LocalSnapshotStore.list(ctx) }.getOrDefault(emptyList()) }
+
     SuiteScaffold(
         title = androidx.compose.ui.res.stringResource(R.string.app_name),
+        // Diagnostics is an ENG-ONLY affordance. Gated so the shipping (prod)
+        // top bar carries no dev entry point.
         actions = {
-            androidx.compose.material3.TextButton(onClick = onDiagnostics) {
-                Text("Diagnostics")
+            if (isEng) {
+                IconButton(onClick = onDiagnostics) {
+                    Icon(
+                        imageVector = Icons.Filled.BugReport,
+                        contentDescription = "Diagnostics (eng)",
+                    )
+                }
             }
         },
+        // The suite status strip reads as a dev/debug smoke-test bar, so it ships
+        // in eng only; prod gets a clean chrome with the NavigationBar as the
+        // sole bottom surface.
+        showSuiteFooter = isEng,
     ) { pad ->
-    Column(
-        modifier = Modifier.fillMaxSize().padding(pad)
-            .verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        Column(modifier = Modifier.fillMaxSize().padding(pad)) {
+            // Tab content fills the space above the NavigationBar; the FAB
+            // overlays it on the Backup tab.
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                when (current) {
+                    HomeTab.Backup -> BackupTab(
+                        snapshotCount = snapshots.size,
+                        onEncrypt = onEncrypt,
+                        onDeviceSnapshot = onDeviceSnapshot,
+                        onViewSnapshots = { tab = HomeTab.Snapshots.name },
+                        onReveal = onReveal,
+                        onLock = onLock,
+                    )
+                    HomeTab.Snapshots -> SnapshotsTab(
+                        snapshots = snapshots,
+                        onManage = onLocalSnapshots,
+                        onCreate = { tab = HomeTab.Backup.name },
+                    )
+                    HomeTab.Restore -> RestoreTab(
+                        onDecrypt = onDecrypt,
+                        onDecryptRecovery = onDecryptRecovery,
+                        onRestoreContent = onRestoreContent,
+                    )
+                }
+
+                // Primary create action, on the Backup tab where a "make a
+                // backup" FAB is the natural primary action.
+                if (current == HomeTab.Backup) {
+                    ExtendedFloatingActionButton(
+                        onClick = onEncrypt,
+                        icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                        text = { Text("Back up now") },
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(UnderstoryTheme.spacing.lg),
+                    )
+                }
+            }
+
+            HomeNavBar(current = current, onSelect = { tab = it.name })
+        }
+    }
+}
+
+/**
+ * Dashboard bottom navigation. Kept as a separate composable so [MainScreen]'s
+ * SuiteScaffold owns the top bar / eng footer and this owns the three top-level
+ * section switch. Rendered at the bottom of [MainScreen]'s content column.
+ */
+@Composable
+private fun HomeNavBar(current: HomeTab, onSelect: (HomeTab) -> Unit) {
+    NavigationBar(
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
-        Text(
-            "Local-first encrypted-envelope tool. Master key is self-generated, " +
-                "Keystore-bound, and never typed during normal use. AES-256-GCM " +
-                "with Argon2id key derivation. Files stay on this device.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(8.dp))
-        // Per SAMSUNG_QUIRKS.md: navigation buttons are plain Button. The
-        // destructive operations live on the next screen and are gated by
-        // the codec which checks the unlocked KEK + picked URIs. Reveal
-        // stays SecureOutlinedButton because it directly exposes the
-        // master key — the only true tap-jacking-sensitive entry point.
-        Button(onClick = onEncrypt, modifier = Modifier.fillMaxWidth()) {
-            Text("Encrypt a file → envelope")
+        HomeTab.entries.forEach { t ->
+            NavigationBarItem(
+                selected = current == t,
+                onClick = { onSelect(t) },
+                icon = { Icon(t.icon, contentDescription = null) },
+                label = { Text(t.label) },
+            )
         }
-        OutlinedButton(onClick = onDecrypt, modifier = Modifier.fillMaxWidth()) {
-            Text("Decrypt an envelope (this device)")
-        }
-        OutlinedButton(onClick = onDecryptRecovery, modifier = Modifier.fillMaxWidth()) {
-            Text("Decrypt with recovery key (cross-device)")
-        }
-        Spacer(Modifier.height(4.dp))
-        OutlinedButton(onClick = onLocalSnapshots, modifier = Modifier.fillMaxWidth()) {
-            Text("Snapshots saved on this device")
-        }
-        OutlinedButton(onClick = onDeviceSnapshot, modifier = Modifier.fillMaxWidth()) {
-            Text("Device-wide snapshot (settings + user dirs)")
-        }
-        OutlinedButton(onClick = onRestoreContent, modifier = Modifier.fillMaxWidth()) {
-            Text("Restore a content stream (.usbs → files)")
-        }
-        Spacer(Modifier.height(4.dp))
-        SecureOutlinedButton(onClick = onReveal, modifier = Modifier.fillMaxWidth()) {
-            Text("Reveal recovery key (for transfer)")
-        }
-        OutlinedButton(onClick = onLock, modifier = Modifier.fillMaxWidth()) {
-            Text("Lock + close")
+    }
+}
+
+/**
+ * Backup tab — the primary face: encryption-posture hero, snapshot summary,
+ * the two backup destinations (single-file envelope + device-wide snapshot),
+ * the reveal/lock controls, and honest complement copy.
+ */
+@Composable
+private fun BackupTab(
+    snapshotCount: Int,
+    onEncrypt: () -> Unit,
+    onDeviceSnapshot: () -> Unit,
+    onViewSnapshots: () -> Unit,
+    onReveal: () -> Unit,
+    onLock: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(
+                start = UnderstoryTheme.spacing.lg,
+                end = UnderstoryTheme.spacing.lg,
+                top = UnderstoryTheme.spacing.md,
+                // Leave room so the FAB never covers the last card.
+                bottom = UnderstoryTheme.spacing.xxl + UnderstoryTheme.spacing.xxl,
+            ),
+        verticalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.md),
+    ) {
+        // Posture hero — a shield-led card that states what protects the data,
+        // in plain language, without overclaiming.
+        SuiteCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Filled.Shield,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(28.dp),
+                )
+                Spacer(Modifier.width(UnderstoryTheme.spacing.md))
+                Column {
+                    Text(
+                        "Encrypted, on this device",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "AES-256-GCM · Argon2id · Keystore-bound master key",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = UnderstoryTheme.semantic.dim,
+                    )
+                }
+            }
+            Spacer(Modifier.height(UnderstoryTheme.spacing.sm))
+            Text(
+                "The master key is self-generated and never typed during normal " +
+                    "use — every backup is gated by your device biometric or PIN. " +
+                    "Files stay local unless you move them off yourself.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
-        // Complement surfacing (§13, D-16/E) — three honest facts that used to
-        // live only in config files or nowhere.
-        Spacer(Modifier.height(8.dp))
-        InfoCard {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    "This vault is excluded from Google One and Smart Switch — " +
-                        "your recovery key is the only restore path. Keep it safe " +
-                        "and off this device.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+        SuiteSectionHeader("Back up")
+        DashRow(
+            icon = Icons.Filled.FolderZip,
+            headline = "Back up a file",
+            supporting = "Encrypt one file into a portable .usbe envelope (max 16 MiB).",
+            onClick = onEncrypt,
+        )
+        DashRow(
+            icon = Icons.Filled.PhoneAndroid,
+            headline = "Device-wide snapshot",
+            supporting = "Capture settings and standard user directories, encrypted.",
+            onClick = onDeviceSnapshot,
+        )
+        DashRow(
+            icon = Icons.Filled.History,
+            headline = "Snapshots on this device",
+            supporting = if (snapshotCount == 0) "None yet — your first backup will appear here."
+                else "$snapshotCount saved locally.",
+            onClick = onViewSnapshots,
+            trailingCount = if (snapshotCount > 0) snapshotCount else null,
+        )
+
+        SuiteSectionHeader("Recovery")
+        // Reveal directly exposes the master key — the one true tap-jacking-
+        // sensitive entry point — so it keeps the SecureOutlinedButton wrapper.
+        SecureOutlinedButton(onClick = onReveal, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Filled.Key, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(UnderstoryTheme.spacing.sm))
+            Text("Reveal recovery key (for transfer)")
+        }
+
+        // Complement surfacing (§13, D-16/E) — honest facts about what this tool
+        // does NOT do, and how to pair it with other tools.
+        SuiteCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Filled.CloudOff,
+                    contentDescription = null,
+                    tint = UnderstoryTheme.semantic.dim,
+                    modifier = Modifier.size(20.dp),
                 )
+                Spacer(Modifier.width(UnderstoryTheme.spacing.sm))
                 Text(
-                    "Moving phones? Reveal your recovery key, transfer any " +
-                        "snapshot to the new device, and use \"Decrypt with " +
-                        "recovery key\" there.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    "Excluded from Google One & Smart Switch",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
+            }
+            Spacer(Modifier.height(UnderstoryTheme.spacing.sm))
+            Text(
+                "Your recovery key is the only restore path — keep it safe and off " +
+                    "this device.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(UnderstoryTheme.spacing.sm))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Filled.Usb,
+                    contentDescription = null,
+                    tint = UnderstoryTheme.semantic.dim,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(UnderstoryTheme.spacing.sm))
                 Text(
-                    "Off-device backup: point your snapshot destination at a " +
+                    "Off-device copies: point a snapshot destination at a " +
                         "Syncthing-synced folder or a USB-OTG drive. Backups only " +
                         "writes the encrypted file — the external tool handles " +
-                        "replication, with no network permission in this app.",
+                        "replication. This app has no network permission.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
+
+        OutlinedButton(onClick = onLock, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(UnderstoryTheme.spacing.sm))
+            Text("Lock + close")
+        }
     }
+}
+
+/**
+ * Snapshots tab — a live count, a preview list of the newest local snapshots as
+ * [SuiteListRow]s (label · timestamp · size, with a leading archive icon), and a
+ * button into the full manage screen (restore / delete / retention). Empty state
+ * when nothing has been saved yet.
+ */
+@Composable
+private fun SnapshotsTab(
+    snapshots: List<LocalSnapshotStore.Info>,
+    onManage: () -> Unit,
+    onCreate: () -> Unit,
+) {
+    if (snapshots.isEmpty()) {
+        com.understory.security.ui.components.EmptyState(
+            title = "No snapshots yet",
+            body = "Encrypted backups you save to this device appear here. Make " +
+                "your first from the Backup tab.",
+            icon = Icons.Filled.History,
+            action = {
+                Button(onClick = onCreate) {
+                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(UnderstoryTheme.spacing.sm))
+                    Text("Make a backup")
+                }
+            },
+        )
+        return
     }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(
+                start = UnderstoryTheme.spacing.lg,
+                end = UnderstoryTheme.spacing.lg,
+                top = UnderstoryTheme.spacing.md,
+                bottom = UnderstoryTheme.spacing.xl,
+            ),
+        verticalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.xs),
+    ) {
+        SuiteSectionHeader(
+            "${snapshots.size} snapshot${if (snapshots.size == 1) "" else "s"} on this device",
+        )
+        // Preview the newest handful inline; the full manage screen owns restore,
+        // delete, and retention (all behavior preserved there).
+        snapshots.take(6).forEach { info ->
+            SuiteListRow(
+                headline = info.userLabel.ifEmpty { "(no label)" },
+                supporting = "${info.appLabel} · ${info.formattedTimestamp()} · " +
+                    "${info.sizeBytes / 1024} KiB",
+                leading = {
+                    Icon(
+                        imageVector = Icons.Filled.FolderZip,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                },
+            )
+        }
+        Spacer(Modifier.height(UnderstoryTheme.spacing.sm))
+        Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Filled.History, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(UnderstoryTheme.spacing.sm))
+            Text("Manage, restore & retention")
+        }
+    }
+}
+
+/**
+ * Restore tab — the three restore paths as leading-icon dashboard rows: decrypt
+ * an envelope on this device, decrypt with a cross-device recovery key, or
+ * restore a content-stream (.usbs) into a folder.
+ */
+@Composable
+private fun RestoreTab(
+    onDecrypt: () -> Unit,
+    onDecryptRecovery: () -> Unit,
+    onRestoreContent: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(
+                start = UnderstoryTheme.spacing.lg,
+                end = UnderstoryTheme.spacing.lg,
+                top = UnderstoryTheme.spacing.md,
+                bottom = UnderstoryTheme.spacing.xl,
+            ),
+        verticalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.md),
+    ) {
+        SuiteCard {
+            Text(
+                "Restore a backup",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(UnderstoryTheme.spacing.xs))
+            Text(
+                "Decrypt an envelope you made, or one from another device using its " +
+                    "recovery key. Output is written to a location you pick.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        DashRow(
+            icon = Icons.Filled.LockOpen,
+            headline = "Decrypt an envelope",
+            supporting = "This device's unlocked master key. For .usbe made here.",
+            onClick = onDecrypt,
+        )
+        DashRow(
+            icon = Icons.Filled.Key,
+            headline = "Decrypt with recovery key",
+            supporting = "Cross-device: paste the base64 recovery key from the origin.",
+            onClick = onDecryptRecovery,
+        )
+        DashRow(
+            icon = Icons.Filled.Devices,
+            headline = "Restore a content stream",
+            supporting = "Unpack a device-snapshot .usbs back into a folder you pick.",
+            onClick = onRestoreContent,
+        )
+    }
+}
+
+/**
+ * One dashboard entry: a [SuiteListRow] with a leading tinted icon, a supporting
+ * line, a trailing chevron (or an optional count pill), and the whole row is the
+ * tap target. Reuses the shared row so the tap-jacking guard + 56dp target +
+ * merged a11y node all come for free.
+ */
+@Composable
+private fun DashRow(
+    icon: ImageVector,
+    headline: String,
+    supporting: String,
+    onClick: () -> Unit,
+    trailingCount: Int? = null,
+) {
+    SuiteListRow(
+        headline = headline,
+        supporting = supporting,
+        onClick = onClick,
+        leading = {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        },
+        trailing = {
+            if (trailingCount != null) {
+                Text(
+                    trailingCount.toString(),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = null,
+                    tint = UnderstoryTheme.semantic.dim,
+                )
+            }
+        },
+    )
 }
 
 @Composable
