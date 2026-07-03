@@ -29,8 +29,6 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
 
     <!--
       DeviceSnapshotService runs as foregroundServiceType="dataSync" —
@@ -106,13 +104,14 @@
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.USE_FINGERPRINT" tools:node="remove" />
     <!--
-      Storage / media. The device-wide snapshot's UserDirsManifestCollector
-      enumerates files under /storage/emulated/0/{Pictures,DCIM,…} and needs
-      READ_MEDIA_* (Android 13+) or READ_EXTERNAL_STORAGE (12-). The basic
-      single-file encrypt/decrypt flow still uses SAF and doesn't need
-      these — the runtime permission gate inside DeviceSnapshotConfigScreen
-      is what actually drives the request, so users who never open the
-      device-snapshot screen are never prompted.
+      Storage / media. The device-wide snapshot's "Add media libraries"
+      convenience source uses READ_MEDIA_* (minSdk is 33, so no pre-13
+      READ_EXTERNAL_STORAGE fallback exists). Arbitrary-folder backup uses
+      SAF tree grants (OpenDocumentTree) and needs no manifest storage
+      permission at all. The basic single-file encrypt/decrypt flow is pure
+      SAF. The runtime permission gate inside DeviceSnapshotConfigScreen is
+      what actually drives the READ_MEDIA_* request, so users who never open
+      the device-snapshot screen are never prompted.
       WRITE_EXTERNAL_STORAGE / MANAGE_EXTERNAL_STORAGE / READ_MEDIA_VISUAL_
       USER_SELECTED stay stripped — we don't write outside SAF, we don't
       need broader-than-media reads, and the visual-user-selected partial
@@ -121,8 +120,9 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:node="remove" />
     <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" tools:node="remove" />
-    <!-- Notifications / overlays -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" tools:node="remove" />
+    <!-- Notifications / overlays. POST_NOTIFICATIONS is declared above (it is
+         runtime-requested on the device-snapshot screen before the FGS runs;
+         no strip here). SYSTEM_ALERT_WINDOW stays stripped — no overlays. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" tools:node="remove" />
     <!-- Package query / install -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:node="remove" />
@@ -206,6 +206,28 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!--
+              File-manager hand-off (backups.md §13): tapping a `.usbe`
+              snapshot in Files by Google routes into the Restore screen.
+              We accept the URI ONLY — never auto-decrypt; the user still
+              authenticates and picks a passphrase inside the app. Both a
+              MIME-typed filter (for `application/octet-stream`) and a
+              scheme+pathPattern filter (for content/file URIs whose name
+              ends in `.usbe`, when the provider reports octet-stream or a
+              generic type) are declared. mimeType is required on a VIEW
+              filter that also constrains data, so the pathPattern branch
+              still pins the octet-stream MIME.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.usbe" />
             </intent-filter>
         </activity>
 

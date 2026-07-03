@@ -3,7 +3,6 @@ package com.understory.backups
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -74,6 +73,17 @@ fun DeviceSnapshotConfigScreen(
         hasMediaPerms = checkMediaPermissions(ctx)
     }
 
+    // POST_NOTIFICATIONS runtime state (backups.md §6). On minSdk 33 this is
+    // always a runtime prompt; if denied, the FGS still runs and the in-app
+    // status row carries progress instead.
+    var hasNotifPerm by remember { mutableStateOf(checkNotifPermission(ctx)) }
+    val notifPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        Diagnostics.log("backups.DeviceSnapshotConfig", "notif perm result: granted=$granted")
+        hasNotifPerm = checkNotifPermission(ctx)
+    }
+
     // SAF tree picker for choosing an external destination directory.
     // OpenDocumentTree returns a tree URI; we takePersistableUriPermission
     // so writes survive process restart.
@@ -110,22 +120,29 @@ fun DeviceSnapshotConfigScreen(
             color = Color(0xFF9E9E9E), fontSize = 12.sp,
         )
 
-        // Phase note — be honest about what's working today vs Wave B-2.
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color(0xFF332A14), RoundedCornerShape(6.dp))
-                .padding(12.dp),
-        ) {
-            Text(
-                "Working today: Android settings, user-dir manifest, full " +
-                    "user-dir content backup (opt-in via the sub-toggle " +
-                    "below; streamed to a .usbs companion file with " +
-                    "chunked AES-GCM). Still pending: suite-app vaults " +
-                    "and vault-folder secure files (need cross-app " +
-                    "BackupContentProviders).",
-                color = Color(0xFFFFB74D), fontSize = 11.sp,
-            )
+        // Notification honesty (backups.md §6, A-14/D-1): the FGS posts
+        // progress notifications, but on minSdk 33 they are silently dropped
+        // unless POST_NOTIFICATIONS is granted at runtime. We request it here
+        // before the snapshot can run, and degrade honestly (the in-app
+        // status line below carries progress) if the user denies.
+        if (!hasNotifPerm) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF332A14), RoundedCornerShape(6.dp))
+                    .padding(12.dp),
+            ) {
+                Text(
+                    "Notifications off — snapshot progress will show on this " +
+                        "screen while it runs. Grant notifications to watch " +
+                        "progress after you navigate away.",
+                    color = Color(0xFFFFB74D), fontSize = 11.sp,
+                )
+            }
+            OutlinedButton(
+                onClick = { notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Grant notification permission") }
         }
 
         Spacer(Modifier.height(4.dp))
@@ -150,13 +167,16 @@ fun DeviceSnapshotConfigScreen(
                 else "Standard user dirs — needs permission",
             description = if (cfg.includeStandardUserDirs) {
                 if (hasMediaPerms)
-                    "Will snapshot Pictures / DCIM / Downloads / Documents / " +
-                        "Music / Movies. Manifest (paths + sizes + first-" +
-                        "64-KiB fingerprints) is always written. Full file " +
-                        "contents are opt-in via the sub-toggle below — " +
-                        "they go in a streaming-encrypted companion file " +
-                        "(.usbs) bound to this snapshot's envelope."
-                else "Needs READ_MEDIA_* permissions. Tap below to grant."
+                    "Coverage: photos, videos and audio (the media library) " +
+                        "under Pictures / DCIM / Downloads / Documents / Music / " +
+                        "Movies. NON-media files other apps saved to Documents or " +
+                        "Downloads are not visible to a rootless app via the media " +
+                        "grant — pick those with a folder grant (coming) for full " +
+                        "coverage. Manifest (paths + sizes + first-64-KiB " +
+                        "fingerprints) is always written; full file contents are " +
+                        "opt-in via the sub-toggle below (streamed to a .usbs " +
+                        "companion file bound to this snapshot's envelope)."
+                else "Needs media permissions. Tap below to grant."
             } else "Skipped.",
             checked = cfg.includeStandardUserDirs,
             onCheckedChange = {
@@ -194,29 +214,11 @@ fun DeviceSnapshotConfigScreen(
             ) { Text("Grant media permissions") }
         }
 
-        SnapshotToggleRow(
-            label = "Suite app vaults (passgen / aegis / …) — phase 2",
-            description = "Stub. Each suite app needs a signature-locked " +
-                "BackupContentProvider for cross-app dispatch. Until it " +
-                "lands, this section emits a 'pending' note. Toggle stays " +
-                "honest about what'll be there.",
-            checked = cfg.includeSuiteAppVaults,
-            onCheckedChange = {
-                cfg = cfg.copy(includeSuiteAppVaults = it)
-                DeviceSnapshotConfig.save(ctx, cfg)
-            },
-        )
-
-        SnapshotToggleRow(
-            label = "Vault-folder secure files — phase 2",
-            description = "Same cross-app dispatch dependency as suite app " +
-                "vaults. Stub for now.",
-            checked = cfg.includeVaultFolderSecureFiles,
-            onCheckedChange = {
-                cfg = cfg.copy(includeVaultFolderSecureFiles = it)
-                DeviceSnapshotConfig.save(ctx, cfg)
-            },
-        )
+        // Suite-app-vault and vault-folder-secure-file sections are HIDDEN
+        // (backups.md §10, D-13): they had no real data and wrote a "pending"
+        // stub. The honest home for peer exports is the deposit-intent collect
+        // screen (§3), not a dead toggle here. When §3 lands, a "Collect suite
+        // exports" entry appears instead. Their config flags default OFF.
 
         Spacer(Modifier.height(8.dp))
 
@@ -231,8 +233,12 @@ fun DeviceSnapshotConfigScreen(
                 color = Color(0xFF9E9E9E), fontSize = 11.sp,
             )
         } else {
+            // Readable destination name (D-17), not the raw content://…%3A… URI.
+            val destName = remember(cfg.destinationTreeUri) {
+                friendlyTreeName(ctx, cfg.destinationTreeUri)
+            }
             Text(
-                "External: ${cfg.destinationTreeUri}",
+                "External folder: $destName",
                 color = Color(0xFF9E9E9E), fontSize = 11.sp,
             )
         }
@@ -264,8 +270,14 @@ fun DeviceSnapshotConfigScreen(
                 Diagnostics.log("backups.DeviceSnapshotConfig", "Snapshot now: tap")
                 val passphrase = vault.recoveryChars()
                 DeviceSnapshotService.start(ctx, passphrase)
-                status = "Snapshot started. Watch the foreground notification " +
-                    "for progress; the result lands in your destination."
+                status = if (hasNotifPerm) {
+                    "Snapshot started. Watch the notification for progress; " +
+                        "the result lands in your destination."
+                } else {
+                    "Snapshot started. Notifications are off, so progress " +
+                        "shows here while this screen is open; the result " +
+                        "lands in your destination."
+                }
                 Toast.makeText(ctx, "Snapshot started", Toast.LENGTH_SHORT).show()
             },
             enabled = cfg.anyEnabled,
@@ -317,14 +329,36 @@ private fun checkMediaPermissions(ctx: Context): Boolean {
     }
 }
 
-private fun currentMediaPermissionsToRequest(): Array<String> {
-    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        arrayOf(
-            Manifest.permission.READ_MEDIA_IMAGES,
-            Manifest.permission.READ_MEDIA_VIDEO,
-            Manifest.permission.READ_MEDIA_AUDIO,
-        )
-    } else {
-        arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-    }
+/**
+ * minSdk is 33, so the per-type READ_MEDIA_* set is the only path (the pre-13
+ * READ_EXTERNAL_STORAGE fallback branch is deleted — D-15). These back only the
+ * "Add media libraries" convenience source; arbitrary-folder backup uses SAF
+ * tree grants and needs no manifest permission.
+ */
+private fun currentMediaPermissionsToRequest(): Array<String> = arrayOf(
+    Manifest.permission.READ_MEDIA_IMAGES,
+    Manifest.permission.READ_MEDIA_VIDEO,
+    Manifest.permission.READ_MEDIA_AUDIO,
+)
+
+private fun checkNotifPermission(ctx: Context): Boolean =
+    ctx.checkCallingOrSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+        PackageManager.PERMISSION_GRANTED
+
+/**
+ * Human-readable name for a persisted SAF tree URI (D-17): the DocumentFile
+ * display name, falling back to the last decoded path segment, never the raw
+ * `content://…%3A…` string.
+ */
+private fun friendlyTreeName(ctx: Context, treeUri: String?): String {
+    if (treeUri == null) return "(none)"
+    return runCatching {
+        val uri = android.net.Uri.parse(treeUri)
+        val name = androidx.documentfile.provider.DocumentFile
+            .fromTreeUri(ctx, uri)?.name
+        if (!name.isNullOrBlank()) return@runCatching name
+        // Fall back to the decoded document-id tail (e.g. "primary:Backups").
+        val decoded = android.net.Uri.decode(uri.lastPathSegment ?: "")
+        decoded.substringAfterLast(':').ifBlank { decoded }.ifBlank { "external folder" }
+    }.getOrDefault("external folder")
 }

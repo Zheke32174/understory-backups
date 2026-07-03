@@ -80,9 +80,14 @@ data class DeviceSnapshotConfig(
                 // content opt-in (off by default — multi-GiB), no
                 // destination URI (forces user choice on first run).
                 includeStandardUserDirs = p.getBoolean(K_USER_DIRS, true),
-                includeSuiteAppVaults = p.getBoolean(K_SUITE_VAULTS, true),
+                // Stub sections default OFF (backups.md §10, D-13): until the
+                // deposit-intent collect mechanism (§3) lands, these sections
+                // have no real data to contribute and are hidden entirely by
+                // the config screen. Defaulting them false means a fresh install
+                // never writes a "pending" stub.
+                includeSuiteAppVaults = p.getBoolean(K_SUITE_VAULTS, false),
                 includeAndroidSettings = p.getBoolean(K_ANDROID_SETTINGS, true),
-                includeVaultFolderSecureFiles = p.getBoolean(K_VAULT_FOLDER, true),
+                includeVaultFolderSecureFiles = p.getBoolean(K_VAULT_FOLDER, false),
                 includeUserDirContent = p.getBoolean(K_USER_DIR_CONTENT, false),
                 destinationTreeUri = p.getString(K_DEST_URI, null),
             )

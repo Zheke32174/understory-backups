@@ -4,7 +4,9 @@ import android.content.Context
 import android.net.Uri
 import com.understory.backup.AesGcmPassphraseCodec
 import com.understory.backup.BackupEnvelope
+import com.understory.backup.StreamingAesGcmCodec
 import com.understory.security.Crypto
+import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -34,12 +36,85 @@ import java.io.FileOutputStream
 object BackupsFlow {
 
     /** 16 MiB cap on input size. Backups should be small; bigger inputs
-     *  are almost certainly a mistake (user picked a video). */
-    private const val MAX_INPUT_SIZE = 16 * 1024 * 1024
+     *  are almost certainly a mistake (user picked a video). Public so the
+     *  Encrypt screen can pre-flight the picked URI's size (§11, D-18) and
+     *  disable Encrypt with a reason instead of failing mid-stream. */
+    const val MAX_INPUT_SIZE = 16 * 1024 * 1024
 
     sealed class Result {
         data class Success(val message: String) : Result()
         data class Failure(val message: String) : Result()
+    }
+
+    /**
+     * The format a restore input is, sniffed from its leading magic bytes
+     * (backups.md §2.1). One `restore` screen dispatches on this so the user
+     * never has to know which format a file is.
+     */
+    enum class InputFormat {
+        /** `USBE` — single-shot [BackupEnvelope]; plaintext is a user file. */
+        ENVELOPE,
+
+        /**
+         * `USBE` whose header appId is the device-snapshot id — its plaintext
+         * is a JSON device bundle, routed to the bundle report, not raw-out.
+         */
+        DEVICE_SNAPSHOT_ENVELOPE,
+
+        /** `USTRSTRM` — streaming `.usbs` UDCS content stream. */
+        CONTENT_STREAM,
+
+        /** Leading bytes match no known format. */
+        UNKNOWN,
+    }
+
+    /** appId that marks a device-snapshot envelope (see [DeviceSnapshotService]). */
+    const val DEVICE_SNAPSHOT_APP_ID = "com.understory.backups.device-snapshot"
+
+    /**
+     * Peek the leading magic bytes of [uri] and classify the format
+     * (backups.md §2.1). For an `USBE` envelope the header is parsed (cheap,
+     * no decrypt) to route device-snapshot bundles separately. Never decrypts.
+     * Returns [InputFormat.UNKNOWN] on any read/parse failure so the caller can
+     * show an honest "unrecognized file" message rather than crashing.
+     */
+    fun sniff(ctx: Context, uri: Uri): InputFormat {
+        return try {
+            ctx.contentResolver.openInputStream(uri).use { raw ->
+                requireNotNull(raw) { "couldn't open input stream" }
+                val input = BufferedInputStream(raw)
+                input.mark(8)
+                val magic = ByteArray(8)
+                val n = readFullyOrLess(input, magic)
+                if (n < 4) return InputFormat.UNKNOWN
+                when {
+                    magic.copyOfRange(0, 4).contentEquals(BackupEnvelope.MAGIC) -> {
+                        // Rewind and parse the (public) header to check appId.
+                        input.reset()
+                        val parsed = runCatching { BackupEnvelope.parse(input) }.getOrNull()
+                        if (parsed != null &&
+                            parsed.header.appId == DEVICE_SNAPSHOT_APP_ID
+                        ) InputFormat.DEVICE_SNAPSHOT_ENVELOPE
+                        else InputFormat.ENVELOPE
+                    }
+                    n >= 8 && magic.contentEquals(StreamingAesGcmCodec.MAGIC) ->
+                        InputFormat.CONTENT_STREAM
+                    else -> InputFormat.UNKNOWN
+                }
+            }
+        } catch (_: Throwable) {
+            InputFormat.UNKNOWN
+        }
+    }
+
+    private fun readFullyOrLess(input: java.io.InputStream, buf: ByteArray): Int {
+        var read = 0
+        while (read < buf.size) {
+            val k = input.read(buf, read, buf.size - read)
+            if (k < 0) break
+            read += k
+        }
+        return read
     }
 
     /**

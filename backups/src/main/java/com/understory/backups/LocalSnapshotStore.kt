@@ -124,4 +124,33 @@ object LocalSnapshotStore {
         if (all.size <= keepLast) return
         all.drop(keepLast).forEach { delete(it.file) }
     }
+
+    // --- Retention setting (D-15 / A-10): the "Keep last N" policy the UI
+    //     exposes and the write paths apply. 0 = Off (keep everything). ---
+
+    private const val PREF = "local_snapshot_store"
+    private const val K_KEEP_LAST = "retention_keep_last"
+
+    /** Allowed retention choices surfaced in the Local snapshots screen. */
+    val RETENTION_CHOICES = listOf(0, 5, 10, 20)
+
+    /** Current "keep last N" setting; 0 means Off (unbounded). */
+    fun retentionKeepLast(ctx: Context): Int =
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).getInt(K_KEEP_LAST, 0)
+
+    fun setRetentionKeepLast(ctx: Context, keepLast: Int) {
+        require(keepLast >= 0) { "keepLast must be non-negative" }
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            .edit().putInt(K_KEEP_LAST, keepLast).apply()
+    }
+
+    /**
+     * Apply the persisted retention policy after a successful local write.
+     * No-op when retention is Off (0). Called by every path that writes a new
+     * local snapshot so "keep last N" is honored uniformly (D-15).
+     */
+    fun applyRetention(ctx: Context) {
+        val keep = retentionKeepLast(ctx)
+        if (keep > 0) rotate(ctx, keep)
+    }
 }

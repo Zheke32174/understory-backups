@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.understory.security.Diagnostics
+import com.understory.security.ui.components.ConfirmDestructiveDialog
 
 /**
  * Browse + restore + delete locally-saved snapshots.
@@ -54,6 +55,9 @@ fun LocalSnapshotsScreen(vault: UnlockedBackupsVault, onBack: () -> Unit) {
     var status by remember { mutableStateOf<String?>(null) }
     var working by remember { mutableStateOf(false) }
     var pendingRestore by remember { mutableStateOf<LocalSnapshotStore.Info?>(null) }
+    // Delete requires an explicit confirm (D-14): no one-tap destructive action.
+    var pendingDelete by remember { mutableStateOf<LocalSnapshotStore.Info?>(null) }
+    var keepLast by remember { mutableStateOf(LocalSnapshotStore.retentionKeepLast(ctx)) }
 
     // SAF createDocument for the restore output. We launch it on demand
     // from the per-row "Restore" button; the callback then drives the
@@ -81,6 +85,26 @@ fun LocalSnapshotsScreen(vault: UnlockedBackupsVault, onBack: () -> Unit) {
         working = false
     }
 
+    // Delete-confirm dialog (D-14). Uses the shared destructive confirm.
+    pendingDelete?.let { target ->
+        ConfirmDestructiveDialog(
+            visible = true,
+            title = "Delete this snapshot?",
+            body = "This permanently removes \"${target.userLabel.ifEmpty { "(no label)" }}\" " +
+                "from this device. This cannot be undone. Any copy you already " +
+                "exported elsewhere is unaffected.",
+            confirmLabel = "Delete",
+            onConfirm = {
+                Diagnostics.log("backups.LocalSnapshots", "delete confirmed: ${target.file.name}")
+                status = if (LocalSnapshotStore.delete(target.file)) {
+                    refreshKey++; "Deleted ${target.file.name}."
+                } else "Couldn't delete ${target.file.name}."
+                pendingDelete = null
+            },
+            onDismiss = { pendingDelete = null },
+        )
+    }
+
     Column(
         modifier = Modifier.fillMaxSize().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -94,10 +118,24 @@ fun LocalSnapshotsScreen(vault: UnlockedBackupsVault, onBack: () -> Unit) {
             color = Color(0xFF9E9E9E), fontSize = 12.sp,
         )
 
+        // Retention (D-15 / A-10): the "keep last N" policy the local-save
+        // paths apply. Off keeps everything.
+        RetentionRow(
+            keepLast = keepLast,
+            onChange = { newKeep ->
+                keepLast = newKeep
+                LocalSnapshotStore.setRetentionKeepLast(ctx, newKeep)
+                // Apply immediately so an existing overflow is pruned now.
+                LocalSnapshotStore.applyRetention(ctx)
+                refreshKey++
+            },
+        )
+
         if (snapshots.isEmpty()) {
-            Spacer(Modifier.height(20.dp))
+            // Empty state fills the remaining space so Back stays pinned.
             Box(
                 modifier = Modifier
+                    .weight(1f)
                     .fillMaxWidth()
                     .background(Color(0xFF141414), RoundedCornerShape(6.dp))
                     .padding(20.dp),
@@ -113,9 +151,11 @@ fun LocalSnapshotsScreen(vault: UnlockedBackupsVault, onBack: () -> Unit) {
                 "${snapshots.size} snapshot${if (snapshots.size == 1) "" else "s"}",
                 color = Color(0xFF707070), fontSize = 11.sp,
             )
+            // weight(1f) so the list scrolls INSIDE the screen and the status
+            // line + Back below can never be pushed off (D-11).
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().weight(1f),
             ) {
                 items(snapshots, key = { it.file.absolutePath }) { info ->
                     SnapshotRow(
@@ -139,12 +179,7 @@ fun LocalSnapshotsScreen(vault: UnlockedBackupsVault, onBack: () -> Unit) {
                         onDelete = {
                             Diagnostics.log("backups.LocalSnapshots",
                                 "delete tap: ${info.file.name}")
-                            if (LocalSnapshotStore.delete(info.file)) {
-                                status = "Deleted ${info.file.name}."
-                                refreshKey++
-                            } else {
-                                status = "Couldn't delete ${info.file.name}."
-                            }
+                            pendingDelete = info
                         },
                     )
                 }
@@ -160,9 +195,35 @@ fun LocalSnapshotsScreen(vault: UnlockedBackupsVault, onBack: () -> Unit) {
             )
         }
 
-        Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
             Text("Back")
+        }
+    }
+}
+
+@Composable
+private fun RetentionRow(
+    keepLast: Int,
+    onChange: (Int) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        Text("Keep last:", color = Color(0xFF9E9E9E), fontSize = 12.sp)
+        LocalSnapshotStore.RETENTION_CHOICES.forEach { choice ->
+            val selected = choice == keepLast
+            OutlinedButton(
+                onClick = { onChange(choice) },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(
+                    if (choice == 0) "Off" else "$choice",
+                    color = if (selected) Color(0xFF81C784) else Color(0xFFE0E0E0),
+                    fontSize = 12.sp,
+                )
+            }
         }
     }
 }

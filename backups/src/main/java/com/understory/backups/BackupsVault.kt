@@ -73,6 +73,53 @@ object BackupsVault {
         }
     }
 
+    /**
+     * Re-bind an existing vault after [android.security.keystore.KeyPermanentlyInvalidatedException]
+     * (biometric re-enrollment / lock-screen change destroyed the wrap key —
+     * backups.md §8.2). The master KEK is NOT lost: it equals the base64
+     * recovery string the user saved at Setup. We decode that string back to
+     * the 32 raw KEK bytes, wrap them under a FRESH device-auth Keystore key
+     * (the caller has already authenticated to obtain [deviceAuthEncryptCipher]
+     * after [Crypto.deleteDeviceAuthKey] cleared the invalidated alias), and
+     * rewrite `header.bin`. Every previously-written envelope stays decryptable
+     * throughout because it keys off the recovery string, not the wrap key.
+     *
+     * The caller owns [recoveryChars] and must wipe it; this method decodes a
+     * private copy and wipes that.
+     */
+    fun rebindFromRecovery(
+        ctx: Context,
+        recoveryChars: CharArray,
+        deviceAuthEncryptCipher: Cipher,
+    ): UnlockedBackupsVault {
+        sweepTmp(ctx)
+        val kek = decodeRecoveryToKek(recoveryChars)
+        try {
+            require(kek.size == MASTER_KEK_BYTES) {
+                "recovery key decodes to ${kek.size} bytes, expected $MASTER_KEK_BYTES"
+            }
+            val wrappedKekCt = deviceAuthEncryptCipher.doFinal(kek)
+            val wrappedKekIv = deviceAuthEncryptCipher.iv
+            writeHeader(ctx, wrappedKekIv, wrappedKekCt)
+            return UnlockedBackupsVault(kek.copyOf())
+        } finally {
+            Crypto.wipe(kek)
+        }
+    }
+
+    /**
+     * Decode the base64 recovery string ([UnlockedBackupsVault.recoveryChars]
+     * form: NO_WRAP|NO_PADDING) back to the raw KEK bytes. Tolerates
+     * surrounding whitespace a user may have introduced when transcribing.
+     */
+    private fun decodeRecoveryToKek(recoveryChars: CharArray): ByteArray {
+        val cleaned = String(recoveryChars).trim().filter { !it.isWhitespace() }
+        return android.util.Base64.decode(
+            cleaned,
+            android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING,
+        )
+    }
+
     /** Daily unlock. */
     fun unlock(
         ctx: Context,

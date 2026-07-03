@@ -10,62 +10,74 @@ import java.util.Collections
 /**
  * Streams the full contents of the standard Android user-content
  * directories as a single packed [InputStream], suitable for feeding
- * into [com.understory.backup.StreamingAesGcmCodec].
+ * into [com.understory.backup.StreamingAesGcmCodec]. The reverse
+ * (decrypt + write files back) is [UserDirsContentRestore].
  *
- * Wire format inside the streaming-encrypted blob:
+ * Wire format inside the streaming-encrypted blob — **UDCSv002**, a
+ * self-delimiting block framing that does NOT depend on a length promised
+ * before the bytes are read (backups.md §2.4, fixes D-3):
  *
  *   header:
  *     +-------+--------+--------------------------------------+
  *     |  off  | size   | field                                |
  *     +-------+--------+--------------------------------------+
- *     |   0   | 8      | magic = "UDCSv001" (ASCII)           |
+ *     |   0   | 8      | magic = "UDCSv002" (ASCII)           |
  *     +-------+--------+--------------------------------------+
  *
- *   then a sequence of file entries until end-of-stream:
+ *   then a sequence of file entries until end-of-stream, each:
  *     +-------+--------+--------------------------------------+
- *     |   0   | 4 BE   | path_length (must fit in 16 KiB)     |
- *     |   4   | path_l | UTF-8 relative path, NFC normalized  |
- *     |  4+pl | 8 BE   | content_length (signed, max 2^62)    |
- *     |       | cl     | file bytes                           |
+ *     |   0   | 4 BE   | path_len (must fit in [MAX_PATH_BYTES])|
+ *     |   4   | path_l | UTF-8 relative path, section-prefixed |
+ *     | 4+pl  | 1      | entry_start marker 0x01 (resync)      |
+ *     |       |        | then body blocks, each:               |
+ *     |       | 4 BE   |   block_len (0x00000000 = end-of-entry)|
+ *     |       | block_l|   block_len bytes of file data        |
+ *     |       | 8 BE   | actual_bytes_written (BE) trailer     |
  *     +-------+--------+--------------------------------------+
  *
- * Why no per-entry sentinel: the streaming codec already carries an
- * end-of-stream signal (final-flag in the chunk's AAD). When the
- * decoder runs out of bytes mid-entry it knows it's truncated; when
- * it cleanly exhausts the stream after a complete entry it knows it's
- * done. No additional EOF marker required.
+ * Why UDCSv002 over the old length-prefixed UDCSv001:
+ *   The v001 writer emitted a `content_length` from `file.length()` at
+ *   walk time, then lazily streamed the file. If the file grew/shrank/
+ *   vanished between walk and stream, the byte count no longer matched
+ *   the promised length and every subsequent frame boundary slid, silently
+ *   corrupting the whole rest of the archive with no way to detect it. The
+ *   v002 writer streams the file in <=1 MiB blocks emitting each block's
+ *   REAL length as it reads, terminates with a 0-length sentinel, and
+ *   writes the true total in a trailer — so there is no pre-committed
+ *   length that can be wrong. A file that shrank simply ends early and
+ *   cleanly; a file that grew is fully captured. The [ENTRY_START] resync
+ *   marker lets the unpacker assert structural integrity before each path
+ *   and abort with a precise offset rather than half-parse.
  *
- * Why 16 KiB path cap: real-world Android paths are well under 4 KiB
- * (PATH_MAX is typically 4096). 16 KiB is a generous bound that
- * defends against malformed file walks producing absurd paths,
- * without imposing an arbitrarily tight limit.
- *
- * Why 2^62 content cap: practical filesystem max-file-size on
- * Android (ext4 / f2fs) is well under this; the cap exists so an
- * out-of-band tampered length field can't trick the decoder into
- * negative-length reads.
+ * The whole UDCS payload is wrapped by [com.understory.backup.StreamingAesGcmCodec],
+ * so every block length is itself GCM-authenticated — an attacker cannot
+ * forge a resync marker or block length without the key.
  *
  * Memory: the implementation reads files lazily via [SequenceInputStream]
- * + per-file lazy [java.io.FileInputStream]s. Memory cost is bounded
- * by the streaming codec's chunk size, NOT by total snapshot size.
+ * + per-entry lazy block streams. Memory cost is bounded by the streaming
+ * codec's chunk size + [BLOCK_SIZE], NOT by total snapshot size.
  *
- * Skipped files: anything we can't read (permission_denied, broken
- * symlink, transient I/O error) is skipped silently — the snapshot
- * is best-effort by design. The companion manifest collector
- * (UserDirsManifestCollector) records file metadata authoritatively
- * so the restore tool can reconcile manifest-vs-content gaps.
+ * Skipped files: anything unreadable is skipped silently — the snapshot
+ * is best-effort by design. The companion manifest collector records file
+ * metadata authoritatively so the restore tool can reconcile gaps.
  */
 object UserDirsContentStream {
 
-    val MAGIC: ByteArray = "UDCSv001".toByteArray(Charsets.US_ASCII)
+    val MAGIC: ByteArray = "UDCSv002".toByteArray(Charsets.US_ASCII)
     const val MAX_PATH_BYTES = 16 * 1024
-    const val MAX_CONTENT_BYTES = (1L shl 62) - 1
+    const val ENTRY_START: Byte = 0x01
 
-    /** Same dirs as [UserDirsManifestCollector]. Keeping them in sync
-     *  is a manual invariant for now; both collectors operate on the
-     *  same logical scope. If divergence becomes useful (e.g.,
-     *  manifest-everything but content-only-photos), introduce a
-     *  shared SnapshotDirSet enum. */
+    /** Body-block size the writer emits per read (backups.md §2.4: <=1 MiB). */
+    const val BLOCK_SIZE = 1 shl 20
+
+    /**
+     * Upper bound the unpacker enforces on any single block_len, so a
+     * corrupt/hostile (but somehow authenticated) length can't drive an
+     * absurd allocation. Matches [BLOCK_SIZE]; the writer never exceeds it.
+     */
+    const val MAX_BLOCK_BYTES = BLOCK_SIZE
+
+    /** Same dirs as [UserDirsManifestCollector]. */
     private val STANDARD_DIRS = listOf(
         "Pictures" to Environment.DIRECTORY_PICTURES,
         "DCIM" to Environment.DIRECTORY_DCIM,
@@ -78,28 +90,16 @@ object UserDirsContentStream {
     /**
      * Build a single [InputStream] that, when fully read, yields the
      * 8-byte magic followed by every readable file from the standard
-     * user dirs in path-prefixed framed form.
+     * user dirs in UDCSv002 self-delimiting form.
      *
      * Caller is responsible for closing the returned stream (which
-     * closes the per-file streams as it advances). Typical use:
-     *
-     *     UserDirsContentStream.open().use { input ->
-     *         StreamingAesGcmCodec.encrypt(
-     *             plaintext = input,
-     *             ciphertext = safOutputStream,
-     *             passphrase = passphraseChars,
-     *             externalAad = envelopeHeaderBytes,
-     *         )
-     *     }
+     * closes the per-entry streams as it advances).
      */
     fun open(): InputStream {
         val streams = mutableListOf<InputStream>(
-            // Magic first, so a partial read can't be confused with
-            // a file path-length prefix.
             java.io.ByteArrayInputStream(MAGIC),
         )
         var fileCount = 0
-        var totalBytes = 0L
         for ((label, envKey) in STANDARD_DIRS) {
             val root = Environment.getExternalStoragePublicDirectory(envKey)
             if (!root.exists() || !root.canRead()) {
@@ -114,10 +114,6 @@ object UserDirsContentStream {
                         val rel = file.absolutePath
                             .removePrefix(root.absolutePath)
                             .trimStart('/')
-                        // Prefix the path with the section label so
-                        // the restore tool can route entries back to
-                        // the right dir even if Pictures and Music
-                        // happened to share a relative subpath.
                         val sectionRel = "$label/$rel"
                         val pathBytes = sectionRel.toByteArray(Charsets.UTF_8)
                         if (pathBytes.size > MAX_PATH_BYTES) {
@@ -125,21 +121,14 @@ object UserDirsContentStream {
                                 "skip oversized path: ${pathBytes.size} bytes")
                             return@forEach
                         }
-                        val len = file.length()
-                        if (len < 0 || len > MAX_CONTENT_BYTES) {
-                            Diagnostics.log("backups.UserDirsContent",
-                                "skip malformed length $len for $sectionRel")
-                            return@forEach
-                        }
-                        streams.add(java.io.ByteArrayInputStream(buildEntryHeader(pathBytes, len)))
-                        // FileInputStream is opened lazily by
-                        // SequenceInputStream when this entry's turn
-                        // comes; not all at once. That's the memory
-                        // bound: open one file at a time, not all of
-                        // them up front.
-                        streams.add(LazyFileInputStream(file))
+                        // Entry preamble: 4B path_len + path + 0x01 marker.
+                        streams.add(
+                            java.io.ByteArrayInputStream(buildEntryPreamble(pathBytes)),
+                        )
+                        // Body: self-delimiting blocks + 0-sentinel + trailer,
+                        // produced lazily so at most one file is open at a time.
+                        streams.add(BlockFramedFileStream(file))
                         fileCount++
-                        totalBytes += len
                     }
             } catch (t: Throwable) {
                 Diagnostics.error("backups.UserDirsContent",
@@ -147,79 +136,125 @@ object UserDirsContentStream {
                 continue
             }
         }
-        Diagnostics.log("backups.UserDirsContent",
-            "stream prepared: files=$fileCount bytes=$totalBytes")
+        Diagnostics.log("backups.UserDirsContent", "stream prepared: files=$fileCount")
         return SequenceInputStream(Collections.enumeration(streams))
     }
 
-    private fun buildEntryHeader(pathBytes: ByteArray, contentLen: Long): ByteArray {
-        val out = ByteArray(4 + pathBytes.size + 8)
-        // 4-byte BE path length
+    /** 4-byte BE path length + path bytes + 1-byte [ENTRY_START] marker. */
+    private fun buildEntryPreamble(pathBytes: ByteArray): ByteArray {
+        val out = ByteArray(4 + pathBytes.size + 1)
         out[0] = ((pathBytes.size ushr 24) and 0xFF).toByte()
         out[1] = ((pathBytes.size ushr 16) and 0xFF).toByte()
         out[2] = ((pathBytes.size ushr 8) and 0xFF).toByte()
         out[3] = (pathBytes.size and 0xFF).toByte()
         System.arraycopy(pathBytes, 0, out, 4, pathBytes.size)
-        // 8-byte BE content length
-        val off = 4 + pathBytes.size
-        out[off + 0] = ((contentLen ushr 56) and 0xFF).toByte()
-        out[off + 1] = ((contentLen ushr 48) and 0xFF).toByte()
-        out[off + 2] = ((contentLen ushr 40) and 0xFF).toByte()
-        out[off + 3] = ((contentLen ushr 32) and 0xFF).toByte()
-        out[off + 4] = ((contentLen ushr 24) and 0xFF).toByte()
-        out[off + 5] = ((contentLen ushr 16) and 0xFF).toByte()
-        out[off + 6] = ((contentLen ushr 8) and 0xFF).toByte()
-        out[off + 7] = (contentLen and 0xFF).toByte()
+        out[4 + pathBytes.size] = ENTRY_START
         return out
     }
 
     /**
-     * Defers opening the [File] until the first read, so we don't
-     * blow through the per-process file-descriptor limit when the
-     * walker enumerates 10k+ files. SequenceInputStream advances
-     * sequentially so at most one [LazyFileInputStream] is "live"
-     * (open) at any moment.
+     * Emits a single file's body in UDCSv002 block framing:
+     *   { 4B block_len, block_len bytes } * ...
+     *   4B 0x00000000  (end-of-entry sentinel)
+     *   8B total_bytes_written (BE)
      *
-     * If the file disappears or becomes unreadable between the
-     * walker visit and the lazy open, [read] returns -1 immediately
-     * (treated as zero-byte content). The content_length in the
-     * preceding header was based on the file's size at walk time;
-     * if the file shrank, the streaming codec will end up with
-     * fewer bytes than the header claimed. The decoder must
-     * tolerate this — a snapshot taken on a live filesystem is
-     * inherently a slightly fuzzy point-in-time.
+     * The whole framing is generated on the fly from lazy reads of [file], so
+     * memory is bounded by [BLOCK_SIZE] and the file is opened only when this
+     * stream is first read (fd-limit safety across a 10k-file walk). If the
+     * file disappears or errors mid-read, the entry ends cleanly at the next
+     * sentinel with whatever bytes were captured — the trailer records the
+     * true total, which is authoritative on restore.
      */
-    private class LazyFileInputStream(private val file: File) : InputStream() {
+    private class BlockFramedFileStream(private val file: File) : InputStream() {
         private var delegate: InputStream? = null
         private var opened = false
-        private var failed = false
+        private var eofOfFile = false
 
-        private fun ensureOpen(): InputStream? {
-            if (failed) return null
-            if (opened) return delegate
+        // Pending framed bytes not yet consumed by the caller.
+        private var pending: ByteArray = ByteArray(0)
+        private var pendingPos = 0
+
+        private var totalWritten = 0L
+        private var trailerEmitted = false
+        private val readBuf = ByteArray(BLOCK_SIZE)
+
+        private fun ensureOpen() {
+            if (opened) return
             opened = true
             delegate = try {
                 file.inputStream()
             } catch (t: Throwable) {
                 Diagnostics.log("backups.UserDirsContent",
-                    "lazy-open failed for ${file.name}: ${t.javaClass.simpleName}")
-                failed = true
+                    "open failed for ${file.name}: ${t.javaClass.simpleName}")
+                eofOfFile = true
                 null
             }
-            return delegate
         }
 
-        override fun read(): Int = ensureOpen()?.read() ?: -1
+        /** Refill [pending] with the next framed unit, or leave it empty when
+         *  the entire entry (blocks + sentinel + trailer) has been emitted. */
+        private fun refill(): Boolean {
+            if (pendingPos < pending.size) return true
+            ensureOpen()
+            if (!eofOfFile) {
+                val n = try {
+                    delegate?.read(readBuf, 0, BLOCK_SIZE) ?: -1
+                } catch (t: Throwable) {
+                    Diagnostics.log("backups.UserDirsContent",
+                        "read failed for ${file.name}: ${t.javaClass.simpleName}")
+                    -1
+                }
+                if (n > 0) {
+                    // Frame: 4B block_len + n bytes.
+                    val framed = ByteArray(4 + n)
+                    framed[0] = ((n ushr 24) and 0xFF).toByte()
+                    framed[1] = ((n ushr 16) and 0xFF).toByte()
+                    framed[2] = ((n ushr 8) and 0xFF).toByte()
+                    framed[3] = (n and 0xFF).toByte()
+                    System.arraycopy(readBuf, 0, framed, 4, n)
+                    totalWritten += n
+                    pending = framed
+                    pendingPos = 0
+                    return true
+                }
+                // n <= 0 : end of file. Fall through to sentinel + trailer.
+                eofOfFile = true
+                runCatching { delegate?.close() }
+            }
+            if (!trailerEmitted) {
+                trailerEmitted = true
+                // 4B zero sentinel + 8B BE total.
+                val tail = ByteArray(4 + 8)
+                // sentinel already zero
+                var t = totalWritten
+                for (i in 11 downTo 4) {
+                    tail[i] = (t and 0xFF).toByte()
+                    t = t ushr 8
+                }
+                pending = tail
+                pendingPos = 0
+                return true
+            }
+            return false
+        }
 
-        override fun read(b: ByteArray, off: Int, len: Int): Int =
-            ensureOpen()?.read(b, off, len) ?: -1
+        override fun read(): Int {
+            if (!refill()) return -1
+            return pending[pendingPos++].toInt() and 0xFF
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (len == 0) return 0
+            if (!refill()) return -1
+            val avail = pending.size - pendingPos
+            val k = minOf(avail, len)
+            System.arraycopy(pending, pendingPos, b, off, k)
+            pendingPos += k
+            return k
+        }
 
         override fun close() {
-            try {
-                delegate?.close()
-            } catch (_: Throwable) {
-                // best-effort; the snapshot run owns the failure log
-            }
+            runCatching { delegate?.close() }
         }
     }
 }

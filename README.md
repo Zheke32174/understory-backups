@@ -1,6 +1,8 @@
 # understory-backups
 
-Local-first encrypted backup orchestrator for the suite: schedules encrypted exports of every suite app's data to user-chosen destinations (USB, Syncthing folder, self-hosted).
+**Understory Backup** — an encrypted-envelope tool and suite export collector. It is the encryption layer that sits *under* whatever replication you already trust (a USB-OTG stick, a Syncthing-synced folder, a Google Drive folder): it encrypts a file — or a device snapshot of your settings and chosen folders — into a self-authenticating `.usbe`/`.usbs` envelope you can then copy anywhere. Every write path has a matching restore. Other suite apps can hand it their own already-encrypted exports (deposit-intent collect); backups never reads another app's vault.
+
+It does **not** reach into peers' vaults, run a network endpoint, or run unattended over your biometric-locked vault. Optional metadata-only snapshots can be scheduled with a separate non-auth-bound key, but restoring anything — and any suite-app export — always requires your biometric.
 
 Status: **alpha** (functional; working the release-blockers list in understory-common).
 

@@ -168,31 +168,13 @@ class DeviceSnapshotService : Service() {
             )
         }
 
-        if (cfg.includeSuiteAppVaults) {
-            // Stubbed: needs a signature-locked BackupContentProvider
-            // in each suite app. Tracked as Wave B-2.
-            payload.put("suite_app_vaults", JSONObject().apply {
-                put("status", "pending")
-                put("reason",
-                    "Wave B-2: each suite app needs a signature-locked " +
-                        "BackupContentProvider that exposes its " +
-                        "BackupAdapter.export(). Once that lands, this " +
-                        "section will contain {passgen, aegis, ...} " +
-                        "vault snapshots inline."
-                )
-            })
-        }
-
-        if (cfg.includeVaultFolderSecureFiles) {
-            payload.put("vault_folder_secure_files", JSONObject().apply {
-                put("status", "pending")
-                put("reason",
-                    "Wave B-2: vault-folder needs the same cross-app " +
-                        "BackupContentProvider so this snapshot can pull " +
-                        "its encrypted blobs without a manual export step."
-                )
-            })
-        }
+        // Suite-app-vault and vault-folder sections are intentionally NOT
+        // written here. The deposit-intent collect mechanism (backups.md §3)
+        // is the real path for peer exports; those envelopes live under
+        // filesDir/collected/ and are copied into the SAF destination
+        // separately. Writing a "pending" stub into the device bundle was a
+        // dead placeholder (D-13) and is deleted. The config toggles for
+        // these sections default OFF and are hidden until §3 lands.
 
         updateNotification("Encrypting + writing…")
         val plaintext = payload.toString().toByteArray(Charsets.UTF_8)
@@ -342,7 +324,7 @@ class DeviceSnapshotService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setSmallIcon(R.drawable.ic_snapshot_notification)
             .setContentTitle(if (complete) "Snapshot complete" else "Snapshotting device")
             .setContentText(text)
             .setOngoing(!complete)
