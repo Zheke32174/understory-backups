@@ -22,5 +22,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "backups"
 include(":common-security")
+include(":elevation")
 include(":common-backup")
 include(":backups")
