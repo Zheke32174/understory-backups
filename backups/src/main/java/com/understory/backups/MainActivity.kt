@@ -251,7 +251,7 @@ class MainActivity : FragmentActivity() {
     }
 }
 
-private enum class Stage { Setup, Unlock, RestoreRecovery, Main, Encrypt, Decrypt, RestoreContent, LocalSnapshots, DeviceSnapshot, Diagnostics }
+private enum class Stage { Setup, Unlock, RestoreRecovery, Main, Encrypt, Decrypt, RestoreContent, LocalSnapshots, DeviceSnapshot, DeviceSnapshotElevated, Diagnostics }
 
 @Composable
 private fun BackupsRoot(
@@ -321,6 +321,7 @@ private fun BackupsRoot(
                 onRestoreRecovery = { setStage(Stage.RestoreRecovery) },
                 onLocalSnapshots = { setStage(Stage.LocalSnapshots) },
                 onDeviceSnapshot = { setStage(Stage.DeviceSnapshot) },
+                onDeviceSnapshotElevated = { setStage(Stage.DeviceSnapshotElevated) },
                 onLock = { v.lock(); setUnlocked(null); onClose() },
                 onDiagnostics = { setStage(Stage.Diagnostics) },
             )
@@ -353,6 +354,11 @@ private fun BackupsRoot(
             val v = unlockedRef() ?: return run { setStage(Stage.Unlock) }
             BackHandler { backToMain() }
             DeviceSnapshotConfigScreen(vault = v, onBack = backToMain)
+        }
+        Stage.DeviceSnapshotElevated -> {
+            val v = unlockedRef() ?: return run { setStage(Stage.Unlock) }
+            BackHandler { backToMain() }
+            DeviceSnapshotElevatedScreen(vault = v, onBack = backToMain)
         }
         Stage.Diagnostics -> {
             BackHandler { backToMain() }
@@ -801,6 +807,7 @@ private fun MainScreen(
     onRestoreRecovery: () -> Unit,
     onLocalSnapshots: () -> Unit,
     onDeviceSnapshot: () -> Unit,
+    onDeviceSnapshotElevated: () -> Unit,
     onLock: () -> Unit,
     onDiagnostics: () -> Unit,
 ) {
@@ -891,6 +898,7 @@ private fun MainScreen(
                         onDecrypt = onDecrypt,
                         onRestoreRecovery = onRestoreRecovery,
                         onRestoreContent = onRestoreContent,
+                        onDeviceSnapshotElevated = onDeviceSnapshotElevated,
                     )
                 }
 
@@ -1178,6 +1186,7 @@ private fun RestoreTab(
     onDecrypt: () -> Unit,
     onRestoreRecovery: () -> Unit,
     onRestoreContent: () -> Unit,
+    onDeviceSnapshotElevated: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -1223,6 +1232,13 @@ private fun RestoreTab(
             headline = "Restore a content stream",
             supporting = "Unpack a device-snapshot .usbs back into a folder you pick.",
             onClick = onRestoreContent,
+        )
+        DashRow(
+            icon = Icons.Filled.PhoneAndroid,
+            headline = "Device snapshot (elevated)",
+            supporting = "Capture app inventory + benign settings, then a guided " +
+                "reinstall checklist and per-key settings restore. Optional Shizuku.",
+            onClick = onDeviceSnapshotElevated,
         )
     }
 }

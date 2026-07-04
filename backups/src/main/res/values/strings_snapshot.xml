@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Device snapshot (elevated) feature. Kept in its own file so the shared
+         strings.xml is untouched. -->
+
+    <string name="snapshot_title">Device snapshot</string>
+    <string name="snapshot_intro">Capture your device\'s posture — the apps you have installed (versions, installer, granted permissions and appop modes) plus a small set of benign, non-secret settings. This is a complement to your encrypted backups: it records what your device looked like so you can rebuild it deliberately after a reset. It reads only; it never changes anything on its own.</string>
+
+    <!-- Elevation grant invite (shown when Shizuku is not granted). -->
+    <string name="snapshot_unlock_inventory">Read your installed-app inventory + granted permissions</string>
+    <string name="snapshot_unlock_settings">Read and, per-key with your opt-in, restore benign settings</string>
+    <string name="snapshot_rootless_fallback">Without elevation, use your regular backups and the system\'s own backup/transfer tools; device-posture capture needs a read-only privileged shell.</string>
+
+    <!-- Capture. -->
+    <string name="snapshot_capture_header">Capture</string>
+    <string name="snapshot_capture_body">Runs read-only shell reads (pm list packages, dumpsys package, settings get) and saves a JSON posture file in this app\'s private storage. No system apps are modified; nothing is uploaded.</string>
+    <string name="snapshot_capture_now">Capture snapshot now</string>
+    <string name="snapshot_capturing">Capturing…</string>
+    <string name="snapshot_capture_ok">Snapshot saved: %1$d apps, %2$d settings.</string>
+    <string name="snapshot_capture_save_failed">Capture ran but the snapshot could not be written to storage.</string>
+    <string name="snapshot_open_failed">That snapshot file could not be read — it may be corrupt.</string>
+
+    <!-- Saved snapshots list. -->
+    <string name="snapshot_saved_header">Saved snapshots (%1$d)</string>
+    <string name="snapshot_saved_sub">%1$d apps · %2$d settings</string>
+    <string name="snapshot_none_yet">No snapshots yet. Capture one above.</string>
+    <string name="snapshot_delete">Delete</string>
+    <string name="snapshot_delete_title">Delete this snapshot?</string>
+    <string name="snapshot_delete_body">Removes the posture file captured %1$s from this device. Your apps and settings are untouched.</string>
+
+    <!-- Guided reinstall (checklist, never silent). -->
+    <string name="snapshot_reinstall_header">Reinstall checklist</string>
+    <string name="snapshot_reinstall_body">Apps in this snapshot that are not installed right now. This is a guided list — nothing is reinstalled automatically. Open each in the store to reinstall it yourself. Suite apps and core system apps are excluded.</string>
+    <string name="snapshot_reinstall_none">Every app in this snapshot is already installed.</string>
+    <string name="snapshot_reinstall_ver">Captured version: %1$s</string>
+    <string name="snapshot_reinstall_store">Store</string>
+
+    <!-- Settings restore (per-key opt-in with diff). -->
+    <string name="snapshot_settings_header">Restore settings</string>
+    <string name="snapshot_settings_body">A small, safe set of settings can be written back, one at a time, only if you opt in. The current value is shown against the captured value first. Non-secret keys only; any key that fails to write is reported honestly.</string>
+    <string name="snapshot_settings_reading">Reading current values…</string>
+    <string name="snapshot_settings_none">No restorable settings were captured in this snapshot.</string>
+    <string name="snapshot_settings_diff">Now: %1$s → captured: %2$s</string>
+    <string name="snapshot_settings_same">Already matches captured (%1$s)</string>
+    <string name="snapshot_settings_unset">unset</string>
+    <string name="snapshot_settings_apply">Apply selected settings</string>
+    <string name="snapshot_settings_apply_hint">Select settings above to restore</string>
+    <string name="snapshot_settings_result_ok">Restored.</string>
+    <string name="snapshot_settings_result_unsupported">Not available: %1$s</string>
+    <string name="snapshot_settings_result_failed">Write rejected: %1$s</string>
+</resources>
