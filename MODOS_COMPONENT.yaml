@@ -1,0 +1,38 @@
+apiVersion: modos.pleiades/v1alpha1
+kind: Component
+metadata:
+  name: understory-mobile-backups
+  repository: Zheke32174/understory-backups
+  visibility: public
+  lifecycle: experimental
+  defaultBranch: main
+spec:
+  roles:
+    - mobile-backup-app
+    - local-export-and-restore-interface
+    - mobile-artifact-protection
+  authority: local-enforcement
+  inputs:
+    - user-selected-mobile-data
+    - signed-backup-policy
+    - destination-capabilities
+  outputs:
+    - encrypted-mobile-backups
+    - restore-proposals
+    - integrity-receipts
+  capabilitiesProvided:
+    - artifact.mobile.backup
+    - artifact.mobile.restore.propose
+    - backup.integrity.verify
+  capabilitiesRequired:
+    - filesystem.mobile.scoped
+    - storage.destination.scoped
+    - secret.encryption.local
+    - steward.approval.restore
+  dataClasses:
+    - public
+    - private
+    - secret
+  failurePolicy: fail-closed
+  promotionPolicy: signed-pr
+  notes: Restore and overwrite operations remain explicit and reviewable; backup transport is replaceable behind artifact contracts.
